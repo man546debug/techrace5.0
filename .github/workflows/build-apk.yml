@@ -1,0 +1,50 @@
+name: Gerar APK TechRace V2.4.1
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+      - 'feature/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Baixar projeto
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Testar protocolo e compilar APK
+        run: gradle --no-daemon testDebugUnitTest assembleDebug
+
+      - name: Disponibilizar testes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TechRace-V2.4-Testes
+          path: app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
+
+      - name: Disponibilizar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TechRace-V2.4-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
