@@ -702,7 +702,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showModuleAdjustmentEditor(settings: ModuleSettings, resumePolling: Boolean) {
+    private fun showModuleAdjustmentEditor(settings: ModuleSettings, resumeLiveRead: Boolean) {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 12, 28, 12) }
         val fields = mutableListOf<EditText>()
         fun field(label: String, initial: String, decimals: Boolean = false): EditText {
@@ -736,7 +736,7 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this).apply { addView(box) }
         val dialog = AlertDialog.Builder(this).setTitle("Ajustes do módulo")
             .setMessage("Valores lidos em $settingsTime. Salvará os campos abaixo e manterá os demais.")
-            .setView(scroll).setNegativeButton("Cancelar") { _, _ -> if (resumePolling) resumePolling() }
+            .setView(scroll).setNegativeButton("Cancelar") { _, _ -> if (resumeLiveRead) resumePolling() }
             .setPositiveButton("Gravar") { _, _ ->
                 try {
                     val values = fields.map { it.text.toString().trim().replace(',', '.').toDoubleOrNull()
@@ -771,10 +771,10 @@ class MainActivity : Activity() {
                     val delta = (deltaUs / 0.8).toInt().coerceIn(0, 65535)
                     changed[18] = delta.toByte(); changed[19] = (delta shr 8).toByte()
                     putPct(20, accelExtra); putPct(21, coldExtra)
-                    writeModuleSettings(changed, resumePolling)
-                } catch (e: Exception) { toast(e.message ?: "Valores inválidos"); if (resumePolling) resumePolling() }
+                    writeModuleSettings(changed, resumeLiveRead)
+                } catch (e: Exception) { toast(e.message ?: "Valores inválidos"); if (resumeLiveRead) resumePolling() }
             }.create()
-        dialog.setOnCancelListener { if (resumePolling) resumePolling() }
+        dialog.setOnCancelListener { if (resumeLiveRead) resumePolling() }
         dialog.show()
     }
 
