@@ -848,7 +848,7 @@ class MainActivity : Activity() {
                 }
                 4 -> if (demoMode || !connected) toast("Conecte o leitor em modo real") else pollOnce()
                 5 -> if (!demoMode) disconnect()
-                6 -> AlertDialog.Builder(this).setTitle("TechRace V2.4.1")
+                6 -> AlertDialog.Builder(this).setTitle("TechRace V5.0")
                     .setMessage("Monitoramento, ajustes e exportação de dados.")
                     .setPositiveButton("OK", null).show()
                 7 -> showModuleMenu()
@@ -1128,7 +1128,7 @@ class MainActivity : Activity() {
         val body = """
             Modo: ${if (demoMode) "DEMO" else "REAL"}
             Conexão: ${if (connectionType == "bluetooth") "Bluetooth SPP" else "USB OTG"}
-            APK: 2.4.1
+            APK: 5.0
             Programação ativa: ${programmingMode?.label ?: "não"}
             Firmware: $firmwareVersion
             Porta: ${if (connected) "ABERTA" else "FECHADA"}

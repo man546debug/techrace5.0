@@ -243,7 +243,7 @@ class DashboardView(context: Context) : View(context) {
             else -> "MÓDULO DESCONECTADO"
         }
         text(c, status, 956f, 55f, 18f, if (demoMode) yellow else if (connected) green else red)
-        text(c, "TechRace V2.4.1", 1490f, 55f, 18f, muted, Paint.Align.RIGHT)
+        text(c, "TechRace V5.0", 1490f, 55f, 18f, muted, Paint.Align.RIGHT)
     }
 
     private fun drawConnectionBarLandscape(c: Canvas) {
@@ -344,7 +344,7 @@ class DashboardView(context: Context) : View(context) {
         roundPanel(c, 12f, 138f, 1000f, 55f, 14f)
         val connectionText = when { demoMode -> "DEMO: DADOS SIMULADOS"; connected && !communicationOk -> "LEITURA INVÁLIDA / ANTIGA"; connected -> "$connectionLabel — CONECTADO"; else -> "TOQUE PARA CONECTAR" }
         text(c, connectionText, 87f, 176f, 20f, if (demoMode) yellow else if (connected) green else yellow)
-        text(c, "TechRace V2.4.1", 680f, 176f, 19f, muted, Paint.Align.CENTER)
+        text(c, "TechRace V5.0", 680f, 176f, 19f, muted, Paint.Align.CENTER)
         val now = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         text(c, now, 974f, 176f, 19f, muted, Paint.Align.RIGHT)
     }

@@ -13,5 +13,5 @@ dependencyResolutionManagement {
         maven(url = "https://jitpack.io")
     }
 }
-rootProject.name = "TechRaceAndroidV2_4_1"
+rootProject.name = "TechRaceAndroidV5_0"
 include(":app")

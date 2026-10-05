@@ -1,4 +1,4 @@
-name: Gerar APK TechRace V2.4.1
+name: Gerar APK TechRace 5.0
 
 on:
   workflow_dispatch:
@@ -38,13 +38,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: TechRace-V2.4-Testes
+          name: TechRace-V5.0-Testes
           path: app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: ignore
 
       - name: Disponibilizar APK
         uses: actions/upload-artifact@v4
         with:
-          name: TechRace-V2.4-APK
+          name: TechRace-V5.0-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error

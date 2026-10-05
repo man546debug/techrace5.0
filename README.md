@@ -1,9 +1,9 @@
-# TechRace Android V2.4.1 — USB OTG, Bluetooth e ajustes
+# TechRace Android V5.0 — USB OTG, Bluetooth e ajustes
 
 Projeto Android em Kotlin baseado nos fontes originais fornecidos do software TechRace para Windows.
-Versão 2.4.1, versionCode 26, pacote `br.com.anderson.techrace`.
+Versão 5.0, versionCode 50, pacote `br.com.anderson.techrace`.
 
-## Novidades da V2.4.1
+## Recursos da V5.0
 
 ### Layout responsivo
 - Rotação automática entre retrato e paisagem.
@@ -41,14 +41,14 @@ Versão 2.4.1, versionCode 26, pacote `br.com.anderson.techrace`.
 - Modo demonstração permite visualizar as telas, mas nunca transmite comandos.
 
 ## Limite conhecido
-`Program.cpp` abre `FlexProgramForm` depois de iniciar Sonda/RPM ou MAP, mas o arquivo `FlexProgram.cpp` não foi fornecido. Por isso a V2.4 implementa somente o que está comprovado nos fontes recebidos: quadro de início, ACK por CRC, acompanhamento das flags da EEPROM e quadro de encerramento. O APK não inventa a sequência visual/operacional que o `FlexProgramForm` poderia executar.
+`Program.cpp` abre `FlexProgramForm` depois de iniciar Sonda/RPM ou MAP, mas o arquivo `FlexProgram.cpp` não foi fornecido. O APK preserva os comandos de início e encerramento presentes nos arquivos recebidos.
 
 ## Compilar no GitHub
 1. Extraia este ZIP na raiz do repositório.
 2. A raiz deve conter `app/`, `build.gradle.kts`, `settings.gradle.kts`, `gradle.properties` e `.github/workflows/build-apk.yml`.
-3. Faça commit em `main` ou `master`, ou abra **Actions > Gerar APK TechRace V2.4.1 > Run workflow**.
+3. Faça commit em `main` ou `master`, ou abra **Actions > Gerar APK TechRace 5.0 > Run workflow**.
 4. O workflow executa testes unitários antes de gerar o APK.
-5. Baixe o artefato **TechRace-V2.4.1-APK** e extraia `app-debug.apk`.
+5. Baixe o artefato **TechRace-V5.0-APK** e extraia `app-debug.apk`.
 
 Requisitos do workflow: Java 17, Gradle 8.7, Android Gradle Plugin 8.5.2, Kotlin 1.9.24, compileSdk/targetSdk 34, minSdk 24 e `usb-serial-for-android:3.8.1`.
 
@@ -57,7 +57,7 @@ Estrutura transmitida conforme `Porta_serial.cpp`:
 
 `F3 | CMD | ADDR_H | ADDR_L | LEN | DATA... | CRC`
 
-CRC-8: polinômio `0x07`, valor inicial `0x00`, MSB first. O software original aceita uma resposta quando há bytes recebidos e o CRC residual do quadro recebido é zero. A V2.4 reproduz essa regra nos comandos de programação e mantém validação estrita de função/tamanho nas leituras conhecidas.
+CRC-8: polinômio `0x07`, valor inicial `0x00`, MSB first. O software original aceita uma resposta quando há bytes recebidos e o CRC residual do quadro recebido é zero. O APK reproduz essa regra nos comandos e mantém validação estrita de função/tamanho nas leituras conhecidas.
 
 A EEPROM é lida com função `1`, endereço `1`, 25 bytes. Os ajustes editáveis gravam essa área com função `4`, preservam os campos não editados e conferem a gravação por releitura. A mistura manual grava somente o byte `MIX` no endereço `0x03`.
 
