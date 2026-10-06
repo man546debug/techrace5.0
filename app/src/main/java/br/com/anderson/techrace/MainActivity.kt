@@ -726,7 +726,7 @@ class MainActivity : Activity() {
     private fun showAdjustments() {
         if (busy) { toast("Aguarde a operação atual terminar"); return }
         val draft = loadLocalSettingsDraft()
-        if (draft != null || demoMode || !connected || !foreground) {
+        if (demoMode || !connected || !foreground) {
             val resume = polling
             if (resume) {
                 polling = false
@@ -763,11 +763,55 @@ class MainActivity : Activity() {
                     if (resume) resumePolling()
                     return@post
                 }
-                val settings = ModuleSettings(data)
+                val current = ModuleSettings(data)
+                val settings = draft?.let {
+                    ModuleSettings(ModuleSettings.mergeEditableDraft(current.raw, it))
+                } ?: current
                 settingsSnapshot = settings
-                settingsTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                settingsTime = if (draft != null) "EEPROM atual + rascunho local" else
+                    java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
                 dashboard.updateProgrammingFlags(settings.mapFlag, settings.rpmFlag)
                 showModuleAdjustmentEditor(settings, resume)
+            }
+        }
+    }
+
+    private fun readSettingsForEditor(resumeLiveRead: Boolean, fallback: ModuleSettings) {
+        if (demoMode || !connected || !foreground) {
+            toast("Conecte a central em modo real para ler a programação")
+            return
+        }
+        if (busy) { toast("Aguarde a operação atual terminar"); return }
+        val token = generation
+        busy = true
+        polling = false
+        dashboard.autoReading = false
+        handler.removeCallbacks(pollTask)
+        ioExecutor.execute {
+            var data: ByteArray? = null
+            var failure: String? = null
+            try {
+                val response = rawExchange(TechRaceProtocol.READ_SETTINGS, token, attempts = 2)
+                data = TechRaceProtocol.extractResponse(response, 1, 25)
+                    ?: error("Resposta de EEPROM inválida")
+            } catch (e: Exception) { failure = e.message ?: "Falha de leitura" }
+            val result = data
+            val errorMessage = failure
+            handler.post {
+                if (!valid(token)) return@post
+                busy = false
+                if (result == null || errorMessage != null) {
+                    toast("Falha ao ler programação: ${errorMessage ?: "resposta inválida"}")
+                    showModuleAdjustmentEditor(fallback, resumeLiveRead)
+                    return@post
+                }
+                val settings = ModuleSettings(result)
+                settingsSnapshot = settings
+                settingsTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                    .format(java.util.Date())
+                dashboard.updateProgrammingFlags(settings.mapFlag, settings.rpmFlag)
+                toast("Programação lida da central")
+                showModuleAdjustmentEditor(settings, resumeLiveRead)
             }
         }
     }
@@ -901,9 +945,25 @@ class MainActivity : Activity() {
         val dialog = AlertDialog.Builder(this).setTitle("Ajustar ECU")
             .setMessage(infoMessage)
             .setView(scroll).setNegativeButton("Cancelar") { _, _ -> if (resumeLiveRead) resumePolling() }
-            .setPositiveButton(if (canWriteNow) "Gravar na ECU" else "Salvar no telefone", null)
+            .setNeutralButton("Ler programação", null)
+            .setPositiveButton(if (canWriteNow) "Gravar alterações" else "Salvar no telefone", null)
             .create()
         dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                if (demoMode || !connected || !foreground) {
+                    toast("Conecte a central em modo real para ler a programação")
+                } else {
+                    AlertDialog.Builder(this)
+                        .setTitle("Ler programação da central?")
+                        .setMessage("Os valores digitados nesta tela serão descartados. A leitura mostrará o que está gravado agora na ECU.")
+                        .setPositiveButton("Ler agora") { _, _ ->
+                            dialog.dismiss()
+                            readSettingsForEditor(resumeLiveRead, settings)
+                        }
+                        .setNegativeButton("Continuar editando", null)
+                        .show()
+                }
+            }
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
                     val coldTime = number("coldTime")
@@ -967,9 +1027,16 @@ class MainActivity : Activity() {
                     setFlag(0x40, rapidEnabled.isChecked)
                     setFlag(0x80, heatingEnabled.isChecked)
                     if (connected && foreground && !demoMode) {
-                        saveLocalSettingsDraft(changed)
-                        writeModuleSettings(changed, resumeLiveRead, rpmCalibrationToSave)
-                        dialog.dismiss()
+                        AlertDialog.Builder(this)
+                            .setTitle("Gravar alterações na central?")
+                            .setMessage("Os ajustes serão enviados à EEPROM e lidos novamente para confirmar a gravação.")
+                            .setPositiveButton("Gravar agora") { _, _ ->
+                                dialog.dismiss()
+                                saveLocalSettingsDraft(changed)
+                                writeModuleSettings(changed, resumeLiveRead, rpmCalibrationToSave)
+                            }
+                            .setNegativeButton("Cancelar", null)
+                            .show()
                     } else {
                         saveLocalSettingsDraft(changed)
                         rpmCalibration = rpmCalibrationToSave
