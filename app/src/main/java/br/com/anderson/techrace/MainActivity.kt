@@ -942,14 +942,29 @@ class MainActivity : Activity() {
             if (loadLocalSettingsDraft() != null) "Rascunho local. Revise os valores e grave na ECU."
             else "Leitura da ECU: $settingsTime."
         } else "Edição disponível sem conexão. Salvará os valores neste telefone; conecte a ECU para gravá-los."
+        val readButton = Button(this).apply { text = "Ler programação da central" }
+        val saveButton = Button(this).apply {
+            text = if (canWriteNow) "Gravar alterações na central" else "Salvar ajustes no celular"
+        }
+        val editorLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 0, 20, 0)
+            addView(readButton, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(saveButton, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(scroll, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            ))
+        }
         val dialog = AlertDialog.Builder(this).setTitle("Ajustar ECU")
             .setMessage(infoMessage)
-            .setView(scroll).setNegativeButton("Cancelar") { _, _ -> if (resumeLiveRead) resumePolling() }
-            .setNeutralButton("Ler programação", null)
-            .setPositiveButton(if (canWriteNow) "Gravar alterações" else "Salvar no telefone", null)
+            .setView(editorLayout).setNegativeButton("Cancelar") { _, _ -> if (resumeLiveRead) resumePolling() }
             .create()
         dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            readButton.setOnClickListener {
                 if (demoMode || !connected || !foreground) {
                     toast("Conecte a central em modo real para ler a programação")
                 } else {
@@ -964,7 +979,7 @@ class MainActivity : Activity() {
                         .show()
                 }
             }
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            saveButton.setOnClickListener {
                 try {
                     val coldTime = number("coldTime")
                     val coldTemp = number("coldTemp")
@@ -1070,7 +1085,8 @@ class MainActivity : Activity() {
 
     private fun saveLocalSettingsDraft(settings: ByteArray) {
         require(settings.size == 25)
-        preferences.edit().putString("ecu_settings_draft", TechRaceProtocol.toHex(settings)).apply()
+        val saved = preferences.edit().putString("ecu_settings_draft", TechRaceProtocol.toHex(settings)).commit()
+        check(saved) { "Não foi possível salvar os ajustes neste telefone" }
     }
 
     private fun writeModuleSettings(settings: ByteArray, resume: Boolean, rpmFactorToSave: Double) {
