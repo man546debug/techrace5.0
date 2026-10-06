@@ -23,6 +23,27 @@ class ModuleSettings(bytes: ByteArray) {
     private fun enabled(mask: Int) = if (u(0) and mask != 0) "Ativado" else "Desativado"
 
     companion object {
+        /** Edit-ready baseline from the Windows v3.2 screen; only used before the first ECU read. */
+        fun editableDefaults(rpmFactor: Double): ModuleSettings {
+            val data = ByteArray(25)
+            data[0] = 0xC0.toByte() // heating and rapid acceleration enabled
+            data[3] = 25 // 39.0625% maximum correction
+            val rpm = rpmTicks(980, rpmFactor)
+            data[4] = rpm.toByte(); data[5] = (rpm shr 8).toByte()
+            val cranking = crankingDurationTicks(2460)
+            data[12] = cranking.toByte(); data[13] = (cranking shr 8).toByte()
+            data[14] = 13 // 20.3125% initial mixture
+            data[15] = encodeTemperature(82.0).toByte()
+            data[16] = encodeTemperature(47.0).toByte()
+            data[17] = encodeTemperature(29.0).toByte()
+            data[18] = 500.toByte(); data[19] = 1 // 400 µs minimum variation
+            data[20] = 13 // 20.3125% extra at 20 ms
+            data[21] = 4 // 6.25% cold extra injection
+            data[22] = lambdaThresholdRaw(490).toByte()
+            data[24] = lambdaAdjustmentRaw(14).toByte()
+            return ModuleSettings(data)
+        }
+
         fun crankingDurationTicks(milliseconds: Int): Int =
             (milliseconds / 0.82).roundToInt().coerceIn(0, 65535)
 

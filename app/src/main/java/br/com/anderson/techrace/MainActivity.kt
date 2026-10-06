@@ -724,8 +724,21 @@ class MainActivity : Activity() {
     }
 
     private fun showAdjustments() {
-        if (demoMode || !connected || !foreground) { toast("Conecte o leitor para ajustar o módulo"); return }
         if (busy) { toast("Aguarde a operação atual terminar"); return }
+        val draft = loadLocalSettingsDraft()
+        if (draft != null || demoMode || !connected || !foreground) {
+            val resume = polling
+            if (resume) {
+                polling = false
+                dashboard.autoReading = false
+                handler.removeCallbacks(pollTask)
+            }
+            val settings = draft?.let(::ModuleSettings) ?: ModuleSettings.editableDefaults(rpmCalibration)
+            settingsSnapshot = settings
+            settingsTime = if (draft != null) "Rascunho salvo neste telefone" else "Valores iniciais editáveis"
+            showModuleAdjustmentEditor(settings, resume)
+            return
+        }
         val token = generation
         val resume = polling
         polling = false
@@ -771,14 +784,27 @@ class MainActivity : Activity() {
             })
         }
         fun field(key: String, label: String, initial: String, decimals: Boolean = false): EditText {
-            box.addView(TextView(this).apply { text = label })
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            row.addView(TextView(this).apply {
+                text = label
+                textSize = 14f
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             val edit = EditText(this).apply {
                 inputType = android.text.InputType.TYPE_CLASS_NUMBER or
                     (if (decimals) android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or android.text.InputType.TYPE_NUMBER_FLAG_SIGNED else 0)
                 setSingleLine(true)
+                gravity = android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL
+                minWidth = (88 * resources.displayMetrics.density).toInt()
+                maxWidth = (112 * resources.displayMetrics.density).toInt()
                 setText(initial)
             }
-            box.addView(edit)
+            row.addView(edit, LinearLayout.LayoutParams(
+                (104 * resources.displayMetrics.density).toInt(), LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            box.addView(row)
             fields[key] = edit
             return edit
         }
@@ -794,17 +820,17 @@ class MainActivity : Activity() {
         fun u(i: Int) = raw[i].toInt() and 255
         fun pct(i: Int) = String.format(java.util.Locale.US, "%.4f", u(i) * 100.0 / 64.0)
         section("Partida à frio")
-        field("coldTime", "Tempo de injeção (0–4000 ms)",
+        field("coldTime", "Tempo de injeção (ms)",
             ModuleSettings.crankingDurationMilliseconds(u(12), u(13)).toString())
-        field("coldTemp", "Temp. máx. (15–35 °C)", settings.temperature(17).toString())
-        field("initialMix", "Mist. inicial (10–limite máx. %)", pct(14), true)
+        field("coldTemp", "Temperatura partida (°C)", settings.temperature(17).toString())
+        field("initialMix", "Mistura inicial (%)", pct(14), true)
         val externalStart = check("Partida externa", 0x04)
         val limitedByIdle = check("Limitado pela lenta", 0x08)
 
         section("Aquecimento do motor")
         val heatingEnabled = check("Aquecimento do motor ativado", 0x80)
-        val heatInjection = field("heatInjection", "Injeção Extra (0–10 %)", pct(21), true)
-        val heatTemperature = field("heatTemperature", "Temp. máx. (35–60 °C)", settings.temperature(16).toString())
+        val heatInjection = field("heatInjection", "Injeção extra fria (%)", pct(21), true)
+        val heatTemperature = field("heatTemperature", "Temperatura aquecimento (°C)", settings.temperature(16).toString())
         fun updateHeatEnabled() {
             heatInjection.isEnabled = heatingEnabled.isChecked
             heatTemperature.isEnabled = heatingEnabled.isChecked
@@ -813,14 +839,14 @@ class MainActivity : Activity() {
         updateHeatEnabled()
 
         section("Correção")
-        field("maxCorrection", "Correção Máx. (10–60 %)", pct(3), true)
-        field("correctionTemperature", "Temperatura Máx. (0–100 °C)", settings.temperature(15).toString())
+        field("maxCorrection", "Correção máxima (%)", pct(3), true)
+        field("correctionTemperature", "Temperatura correção (°C)", settings.temperature(15).toString())
 
         section("Aceleração rápida")
         val rapidEnabled = check("Aceleração Rápida ativada", 0x40)
-        val rapidVariation = field("rapidVariation", "Variação Mínima (200–15000 µs)",
+        val rapidVariation = field("rapidVariation", "Variação mínima (µs)",
             ModuleSettings.rapidVariationMicroseconds(u(18), u(19)).toString(), true)
-        val rapidExtra = field("rapidExtra", "Tempo Extra a 20 ms (0–30 %)", pct(20), true)
+        val rapidExtra = field("rapidExtra", "Extra a 20 ms (%)", pct(20), true)
         fun updateRapidEnabled() {
             rapidVariation.isEnabled = rapidEnabled.isChecked
             rapidExtra.isEnabled = rapidEnabled.isChecked
@@ -830,7 +856,7 @@ class MainActivity : Activity() {
 
         section("Ajuste do RPM marcha-lenta")
         val ticks = u(4) + 256 * u(5)
-        val rpmValue = field("rpm", "RPM Lenta (600–1500 RPM)",
+        val rpmValue = field("rpm", "RPM de lenta",
             if (ticks == 0) "850" else ModuleSettings.rpmTarget(ticks, rpmCalibration).toString())
         val rpmButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val rpmDown = Button(this).apply { text = "RPM −25" }
@@ -854,8 +880,8 @@ class MainActivity : Activity() {
 
         section("Lambda lenta")
         val lambdaEnabled = check("Lambda Lenta ativada", 0x10)
-        val lambdaTime = field("lambdaTime", "Tempo Ajuste (10–50 s)", (u(24) * 0.21).toInt().toString())
-        val lambdaValue = field("lambdaValue", "Valor Lambda (0–1000 mV)",
+        val lambdaTime = field("lambdaTime", "Tempo Lambda (s)", (u(24) * 0.21).toInt().toString())
+        val lambdaValue = field("lambdaValue", "Valor Lambda (mV)",
             ((u(22) * 5000.0 / 255.0).toInt()).toString())
         val widebandEnabled = check("WideBand Sensor", 0x20)
         fun updateLambdaEnabled() {
@@ -867,10 +893,15 @@ class MainActivity : Activity() {
         updateLambdaEnabled()
 
         val scroll = ScrollView(this).apply { addView(box) }
-        val dialog = AlertDialog.Builder(this).setTitle("Ajustes do módulo")
-            .setMessage("Campos e opções equivalentes ao programa Windows. Leitura: $settingsTime.")
+        val canWriteNow = connected && foreground && !demoMode
+        val infoMessage = if (canWriteNow) {
+            if (loadLocalSettingsDraft() != null) "Rascunho local. Revise os valores e grave na ECU."
+            else "Leitura da ECU: $settingsTime."
+        } else "Edição disponível sem conexão. Salvará os valores neste telefone; conecte a ECU para gravá-los."
+        val dialog = AlertDialog.Builder(this).setTitle("Ajustar ECU")
+            .setMessage(infoMessage)
             .setView(scroll).setNegativeButton("Cancelar") { _, _ -> if (resumeLiveRead) resumePolling() }
-            .setPositiveButton("Gravar", null)
+            .setPositiveButton(if (canWriteNow) "Gravar na ECU" else "Salvar no telefone", null)
             .create()
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -935,8 +966,19 @@ class MainActivity : Activity() {
                     setFlag(0x20, widebandEnabled.isChecked)
                     setFlag(0x40, rapidEnabled.isChecked)
                     setFlag(0x80, heatingEnabled.isChecked)
-                    writeModuleSettings(changed, resumeLiveRead, rpmCalibrationToSave)
-                    dialog.dismiss()
+                    if (connected && foreground && !demoMode) {
+                        saveLocalSettingsDraft(changed)
+                        writeModuleSettings(changed, resumeLiveRead, rpmCalibrationToSave)
+                        dialog.dismiss()
+                    } else {
+                        saveLocalSettingsDraft(changed)
+                        rpmCalibration = rpmCalibrationToSave
+                        preferences.edit().putInt("rpm_factor", rpmCalibration.toInt()).apply()
+                        settingsSnapshot = ModuleSettings(changed)
+                        settingsTime = "Rascunho salvo neste telefone"
+                        toast("Rascunho salvo. Conecte a ECU e abra Ajustar ECU para gravar.")
+                        dialog.dismiss()
+                    }
                 } catch (e: Exception) { toast(e.message ?: "Valores inválidos") }
             }
         }
@@ -951,6 +993,17 @@ class MainActivity : Activity() {
             handler.removeCallbacks(pollTask)
             handler.postDelayed(pollTask, pollingIntervalMs)
         }
+    }
+
+    private fun loadLocalSettingsDraft(): ByteArray? {
+        val encoded = preferences.getString("ecu_settings_draft", null) ?: return null
+        val values = encoded.trim().split(Regex("\\s+")).mapNotNull { it.toIntOrNull(16)?.toByte() }
+        return values.takeIf { it.size == 25 }?.toByteArray()
+    }
+
+    private fun saveLocalSettingsDraft(settings: ByteArray) {
+        require(settings.size == 25)
+        preferences.edit().putString("ecu_settings_draft", TechRaceProtocol.toHex(settings)).apply()
     }
 
     private fun writeModuleSettings(settings: ByteArray, resume: Boolean, rpmFactorToSave: Double) {
@@ -978,6 +1031,7 @@ class MainActivity : Activity() {
                 } else {
                     rpmCalibration = rpmFactorToSave
                     preferences.edit().putInt("rpm_factor", rpmCalibration.toInt()).apply()
+                    preferences.edit().remove("ecu_settings_draft").apply()
                     settingsSnapshot = ModuleSettings(result)
                     settingsTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
                     moduleReport = settingsSnapshot!!.describe(rpmCalibration)

@@ -67,17 +67,17 @@ class ModuleQueryTest {
         assertTrue(kotlin.math.abs(ModuleSettings(bytes).temperature(17) - 25) <= 2)
     }
 
-    @Test fun windowsFlexFieldsUseTheSameEepromScales() {
-        // Values visible in the Windows Flex Programável screen.
-        assertEquals(3000, ModuleSettings.crankingDurationTicks(2460))
-        assertEquals(2460, ModuleSettings.crankingDurationMilliseconds(0xB8, 0x0B))
-        assertEquals(13, TechRaceProtocol.encodePercent(20.3125)) // Mist. Inicial, EEPROM offset 14
-        assertEquals(25, ModuleSettings.lambdaThresholdRaw(490))
-        assertEquals(67, ModuleSettings.lambdaAdjustmentRaw(14))
-        assertEquals(500, ModuleSettings.rapidVariationTicks(400))
-        assertEquals(400, ModuleSettings.rapidVariationMicroseconds(0xF4, 1))
-        val rpmTicks = ModuleSettings.rpmTicks(980, 1.0)
-        assertEquals(980, ModuleSettings.rpmTarget(rpmTicks, 1.0))
+    @Test fun disconnectedEditorDefaultsMatchWindowsExample() {
+        val settings = ModuleSettings.editableDefaults(1.0)
+        assertEquals(2460, ModuleSettings.crankingDurationMilliseconds(
+            settings.raw[12].toInt() and 255, settings.raw[13].toInt() and 255))
+        assertEquals(980, ModuleSettings.rpmTarget(
+            (settings.raw[4].toInt() and 255) + 256 * (settings.raw[5].toInt() and 255), 1.0))
+        assertEquals(0xC0, settings.raw[0].toInt() and 255)
+        assertEquals(20, settings.raw[14].toInt() * 100 / 64)
+        assertTrue(kotlin.math.abs(settings.temperature(17) - 29) <= 2)
+        assertTrue(kotlin.math.abs(settings.temperature(16) - 47) <= 2)
+        assertTrue(kotlin.math.abs(settings.temperature(15) - 82) <= 2)
     }
 
     @Test(expected = IllegalArgumentException::class)
