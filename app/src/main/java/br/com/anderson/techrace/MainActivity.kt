@@ -1510,7 +1510,8 @@ class MainActivity : Activity() {
             Erros: ${dashboard.errorCount}
             Último erro: $lastError
             Intervalo interno (RAM 47): ${data?.raw4 ?: "--"}
-            Mistura interna Y_PERCENT (RAM 49): ${data?.raw6 ?: "--"}
+            Byte bruto Y_PERCENT (RAM 49): ${data?.raw6 ?: "--"}
+            Índice estimado MAP + sonda: ${data?.mixtureIndex?.let { "$it idx" } ?: "--"}
             ADC temperatura: ${data?.temperatureRaw ?: "--"}
 
             TX (${TechRaceProtocol.READ_LIVE_10.size} bytes):
