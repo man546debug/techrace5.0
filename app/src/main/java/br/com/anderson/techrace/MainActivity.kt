@@ -308,31 +308,14 @@ class MainActivity : Activity() {
             return
         }
         val levels = intArrayOf(0, 25, 50, 75, 100)
-        var selectedIndex = -1
         val options = levels.map { "$it% de mistura" }.toTypedArray()
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Mistura manual")
-            .setMessage("Selecione o percentual que deseja enviar ao módulo.")
-            .setSingleChoiceItems(options, -1) { dialog, index ->
-                selectedIndex = index
-                (dialog as AlertDialog).getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
+        AlertDialog.Builder(this)
+            .setTitle("Selecione a mistura manual")
+            .setItems(options) { _, index ->
+                confirmManualMixture(levels[index])
             }
             .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Continuar", null)
-            .create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).apply {
-                isEnabled = false
-                setOnClickListener {
-                    val selection = selectedIndex
-                    if (selection >= 0) {
-                        dialog.dismiss()
-                        confirmManualMixture(levels[selection])
-                    }
-                }
-            }
-        }
-        dialog.show()
+            .show()
     }
 
     private fun confirmManualMixture(levelPercent: Int) {
