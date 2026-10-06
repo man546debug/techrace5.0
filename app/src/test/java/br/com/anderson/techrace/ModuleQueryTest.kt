@@ -60,7 +60,7 @@ class ModuleQueryTest {
 
     @Test fun mergingDraftPreservesReservedBytesAndProgrammingFlags() {
         val current = ByteArray(25) { (it + 10).toByte() }.also { it[0] = 0x03 }
-        val draft = ByteArray(25) { (it + 100).toByte() }.also { it[0] = 0xFC }
+        val draft = ByteArray(25) { (it + 100).toByte() }.also { it[0] = 0xFC.toByte() }
         val merged = ModuleSettings.mergeEditableDraft(current, draft)
         val editable = setOf(3, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24)
         for (i in 1 until 25) {
