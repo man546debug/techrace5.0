@@ -72,6 +72,14 @@ class ModuleQueryTest {
         assertEquals(current[2], merged[2]) // current manual mixture is preserved
     }
 
+    @Test fun estimatedMixtureIndexUsesMapAndLambdaSignals() {
+        assertEquals(30, TechRaceDecoder.estimatedMixtureIndex(1.0, 1000))
+        assertEquals(70, TechRaceDecoder.estimatedMixtureIndex(2.0, 3000))
+        assertEquals(50, TechRaceDecoder.estimatedMixtureIndex(1.25, 2500))
+        assertNull(TechRaceDecoder.estimatedMixtureIndex(Double.NaN, 1000))
+        assertNull(TechRaceDecoder.estimatedMixtureIndex(1.0, 5001))
+    }
+
     @Test fun adjustmentTemperatureEncodingMatchesPrincipalCpp() {
         val bytes = ByteArray(25)
         val expected = TechRaceDecoder.temperatureC(ModuleSettings.encodeTemperature(35.0))
