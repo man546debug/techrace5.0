@@ -1371,7 +1371,7 @@ class MainActivity : Activity() {
         val body = """
             Modo: ${if (demoMode) "DEMO" else "REAL"}
             Conexão: ${if (connectionType == "bluetooth") "Bluetooth SPP" else "USB OTG"}
-            APK: 5.0
+            APK: 5.0.1
             Programação ativa: ${programmingMode?.label ?: "não"}
             Firmware: $firmwareVersion
             Porta: ${if (connected) "ABERTA" else "FECHADA"}
@@ -1410,20 +1410,20 @@ class MainActivity : Activity() {
     }
 
     private fun showModuleMenu() {
-        val items = arrayOf("Consultar versão do firmware", "Ler configurações EEPROM",
-            "Ver última configuração lida", "RAM adicional (experimental, valores brutos)",
-            "Ajustar parâmetros do módulo", "Fator RPM e intervalo de leitura", "Exportar telemetria CSV")
+        val items = arrayOf("Ajustar ECU: partida a frio, temperaturas, aceleração, RPM e Lambda",
+            "Consultar versão do firmware", "Ler configurações EEPROM", "Ver última configuração lida",
+            "RAM adicional (experimental, valores brutos)", "Fator RPM e intervalo de leitura", "Exportar telemetria CSV")
         AlertDialog.Builder(this).setTitle("Ajustes").setItems(items) { _, i ->
             when (i) {
-                0 -> queryModule(0)
-                1 -> queryModule(1)
-                2 -> showText("EEPROM — $settingsTime", settingsSnapshot?.describe(rpmCalibration)
+                0 -> showAdjustments()
+                1 -> queryModule(0)
+                2 -> queryModule(1)
+                3 -> showText("EEPROM — $settingsTime", settingsSnapshot?.describe(rpmCalibration)
                     ?: "Nenhuma configuração foi lida nesta conexão.")
-                3 -> AlertDialog.Builder(this).setTitle("Mapa RAM a validar")
+                4 -> AlertDialog.Builder(this).setTitle("Mapa RAM a validar")
                     .setMessage("Consulta 0x4D..0x56 segundo a planilha FLEX V10.0. A compatibilidade com firmware 2.0 não foi confirmada. Os dados serão mostrados como valores brutos.")
                     .setPositiveButton("Consultar") { _, _ -> queryModule(2) }
                     .setNegativeButton("Cancelar", null).show()
-                4 -> showAdjustments()
                 5 -> showLocalAdjustments()
                 6 -> exportDocument("techrace-telemetria.csv", "text/csv", csvContent())
             }

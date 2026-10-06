@@ -1,7 +1,7 @@
-# TechRace Android V5.0 — USB OTG, Bluetooth e ajustes
+# TechRace Android V5.0.1 — USB OTG, Bluetooth e ajustes
 
 Projeto Android em Kotlin baseado nos fontes originais fornecidos do software TechRace para Windows.
-Versão 5.0, versionCode 50, pacote `br.com.anderson.techrace`.
+Versão 5.0.1, versionCode 52, pacote `br.com.anderson.techrace`.
 
 ## Recursos da V5.0
 
@@ -14,7 +14,7 @@ Versão 5.0, versionCode 50, pacote `br.com.anderson.techrace`.
 - Mantém a leitura USB OTG em 19200 8N1 e acrescenta Bluetooth Classic SPP para leitores seriais pareados.
 - O tipo de conexão é escolhido em **Configurações**; USB OTG continua disponível.
 - Mantém monitor, gráficos, EEPROM, diagnóstico, modo demonstração e exportação CSV/TXT.
-- Em **Ajustes**, permite ler, alterar e verificar por releitura os parâmetros do módulo: RPM alvo, limite de correção, limiar da mistura, temperaturas, enriquecimento de aceleração e variação inicial.
+- A primeira opção de **Ajustes** abre diretamente os parâmetros da ECU: tempo de injeção e temperatura da partida a frio, mistura inicial, partida externa e limite pela lenta; aquecimento e injeção extra; correção e temperaturas; aceleração rápida; RPM alvo; lambda lenta, tempo e valor da sonda e opção WideBand.
 - Nova aba **PROGRAMAÇÃO** com telas para:
   - **Programar Sonda / RPM**;
   - **Programar Sensor MAP**;
