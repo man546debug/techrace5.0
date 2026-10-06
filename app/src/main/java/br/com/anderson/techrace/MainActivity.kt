@@ -52,6 +52,11 @@ class MainActivity : Activity() {
     // All port open/read/write/close operations belong to the same serial executor.
     private var transport: SerialTransport? = null
     private var activeBluetoothAddress: String? = null
+    private var bluetoothListDialog: AlertDialog? = null
+    private var bluetoothListAdapter: ArrayAdapter<String>? = null
+    private val bluetoothDevices = linkedMapOf<String, BluetoothDevice>()
+    private val bluetoothBondedAddresses = mutableSetOf<String>()
+    private var bluetoothDiscoveryFinished = false
     private val ioExecutor = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var generation = 0
@@ -122,6 +127,29 @@ class MainActivity : Activity() {
         }
     }
 
+    private val bluetoothDiscoveryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device = if (Build.VERSION.SDK_INT >= 33)
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                    else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                    } ?: return
+                    val address = try { device.address } catch (_: SecurityException) { return }
+                    if (bluetoothListDialog?.isShowing != true || bluetoothDevices.containsKey(address)) return
+                    bluetoothDevices[address] = device
+                    renderBluetoothDeviceList()
+                }
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    bluetoothDiscoveryFinished = true
+                    updateBluetoothSearchMessage()
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.rgb(6, 9, 11)
@@ -134,6 +162,16 @@ class MainActivity : Activity() {
         else {
             @Suppress("DEPRECATION")
             registerReceiver(receiver, filter)
+        }
+        val bluetoothFilter = IntentFilter(BluetoothDevice.ACTION_FOUND).apply {
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
+        // Bluetooth discovery broadcasts are sent by the Bluetooth system app, so the
+        // receiver must be exported to receive them on Android 13 and newer.
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(bluetoothDiscoveryReceiver, bluetoothFilter, RECEIVER_EXPORTED)
+        else {
+            @Suppress("DEPRECATION")
+            registerReceiver(bluetoothDiscoveryReceiver, bluetoothFilter)
         }
         rpmCalibration = preferences.getInt("rpm_factor", 1).toDouble()
         pollingIntervalMs = preferences.getLong("poll_ms", 250).coerceIn(80, 2000)
@@ -174,7 +212,7 @@ class MainActivity : Activity() {
         if (requestCode == 410) {
             if (grantResults.isNotEmpty() && grantResults.all { it == android.content.pm.PackageManager.PERMISSION_GRANTED })
                 showBluetoothDevices()
-            else toast("Permissão Bluetooth negada")
+            else toast("Permissão para procurar dispositivos Bluetooth negada")
         }
     }
 
@@ -186,6 +224,7 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         foreground = false
+        stopBluetoothDiscovery()
         handler.removeCallbacks(demoTask)
         disconnect()
         super.onStop()
@@ -195,6 +234,7 @@ class MainActivity : Activity() {
         handler.removeCallbacksAndMessages(null)
         ioExecutor.shutdown() // finish the already queued close operation
         unregisterReceiver(receiver)
+        unregisterReceiver(bluetoothDiscoveryReceiver)
         super.onDestroy()
     }
 
@@ -268,21 +308,38 @@ class MainActivity : Activity() {
             return
         }
         val levels = intArrayOf(0, 25, 50, 75, 100)
-        AlertDialog.Builder(this)
+        var selectedIndex = -1
+        val options = levels.map { "$it% de mistura" }.toTypedArray()
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Mistura manual")
-            .setMessage("Nível aplicado ao limite de correção configurado.")
-            .setItems(levels.map { "$it% de mistura" }.toTypedArray()) { _, index ->
-                confirmManualMixture(levels[index])
+            .setMessage("Selecione o percentual que deseja enviar ao módulo.")
+            .setSingleChoiceItems(options, -1) { dialog, index ->
+                selectedIndex = index
+                (dialog as AlertDialog).getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = true
             }
             .setNegativeButton("Cancelar", null)
-            .show()
+            .setPositiveButton("Continuar", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).apply {
+                isEnabled = false
+                setOnClickListener {
+                    val selection = selectedIndex
+                    if (selection >= 0) {
+                        dialog.dismiss()
+                        confirmManualMixture(levels[selection])
+                    }
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun confirmManualMixture(levelPercent: Int) {
         AlertDialog.Builder(this)
-            .setTitle("Aplicar $levelPercent% de mistura?")
-            .setMessage("O módulo será atualizado e o valor será conferido após a gravação.")
-            .setPositiveButton("Aplicar") { _, _ -> programManualMixture(levelPercent) }
+            .setTitle("Deseja alterar a mistura para $levelPercent%?")
+            .setMessage("Ao confirmar, o comando será enviado ao módulo e o valor gravado será conferido.")
+            .setPositiveButton("Sim, enviar comando") { _, _ -> programManualMixture(levelPercent) }
             .setNegativeButton("Cancelar", null)
             .show()
     }
@@ -934,26 +991,101 @@ class MainActivity : Activity() {
         (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
 
     private fun showBluetoothDevices() {
-        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) !=
-            android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT), 410)
+        val requiredPermissions = if (Build.VERSION.SDK_INT >= 31) {
+            arrayOf(android.Manifest.permission.BLUETOOTH_SCAN, android.Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        val missingPermissions = requiredPermissions.filter {
+            checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (missingPermissions.isNotEmpty()) {
+            requestPermissions(missingPermissions.toTypedArray(), 410)
             return
         }
         val adapter = bluetoothAdapter()
         if (adapter == null || !adapter.isEnabled) {
-            toast("Ative o Bluetooth do Android e pareie o leitor nas configurações do sistema")
+            toast("Ative o Bluetooth do Android para procurar leitores próximos")
             return
         }
-        val devices = try { adapter.bondedDevices.toList().sortedBy { it.name ?: it.address } }
+        try {
+            bluetoothDevices.clear()
+            bluetoothBondedAddresses.clear()
+            adapter.bondedDevices.forEach { device ->
+                bluetoothDevices[device.address] = device
+                bluetoothBondedAddresses += device.address
+            }
+        }
         catch (_: SecurityException) { toast("Permissão Bluetooth necessária"); return }
-        if (devices.isEmpty()) {
-            toast("Nenhum leitor pareado. Pareie-o nas configurações do Android.")
-            return
+        bluetoothDiscoveryFinished = false
+        val initialItems = bluetoothListLabels()
+        val listAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, initialItems)
+        bluetoothListAdapter = listAdapter
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Escolher leitor Bluetooth")
+            .setMessage("Procurando dispositivos próximos… Toque em um leitor para conectar.")
+            .setAdapter(listAdapter) { _, index ->
+                val device = sortedBluetoothDevices().getOrNull(index) ?: return@setAdapter
+                stopBluetoothDiscovery()
+                connectBluetooth(device)
+            }
+            .setNegativeButton("Cancelar", null)
+            .create()
+        bluetoothListDialog = dialog
+        dialog.setOnDismissListener {
+            stopBluetoothDiscovery()
+            bluetoothListDialog = null
+            bluetoothListAdapter = null
         }
-        AlertDialog.Builder(this).setTitle("Leitor Bluetooth pareado")
-            .setItems(devices.map { "${it.name ?: "Leitor"} • ${it.address}" }.toTypedArray()) { _, index ->
-                connectBluetooth(devices[index])
-            }.setNegativeButton("Cancelar", null).show()
+        dialog.show()
+        renderBluetoothDeviceList()
+        try {
+            if (!adapter.startDiscovery()) {
+                bluetoothDiscoveryFinished = true
+                updateBluetoothSearchMessage()
+                toast("Não foi possível iniciar a busca Bluetooth")
+            }
+        } catch (_: SecurityException) {
+            bluetoothDiscoveryFinished = true
+            updateBluetoothSearchMessage()
+            toast("Permissão para procurar dispositivos Bluetooth necessária")
+        }
+    }
+
+    private fun safeBluetoothName(device: BluetoothDevice): String =
+        try { device.name ?: "Leitor" } catch (_: SecurityException) { "Leitor" }
+
+    private fun sortedBluetoothDevices(): List<BluetoothDevice> = bluetoothDevices.values
+        .sortedWith(compareBy({ safeBluetoothName(it).lowercase() }, { it.address }))
+
+    private fun bluetoothListLabels(): List<String> = sortedBluetoothDevices()
+        .map { device ->
+            val state = if (device.address in bluetoothBondedAddresses) "pareado" else "disponível"
+            "${safeBluetoothName(device)} • ${device.address} ($state)"
+        }
+
+    private fun renderBluetoothDeviceList() {
+        bluetoothListAdapter?.let { list ->
+            list.clear()
+            list.addAll(bluetoothListLabels())
+        }
+        updateBluetoothSearchMessage()
+    }
+
+    private fun updateBluetoothSearchMessage() {
+        val dialog = bluetoothListDialog ?: return
+        if (!dialog.isShowing) return
+        dialog.setMessage(when {
+            !bluetoothDiscoveryFinished -> "Procurando dispositivos próximos… Toque em um leitor para conectar."
+            bluetoothDevices.isEmpty() -> "Nenhum dispositivo encontrado. Verifique se o leitor está ligado e visível."
+            else -> "Busca concluída. Selecione o leitor ao qual deseja conectar."
+        })
+    }
+
+    @Suppress("MissingPermission")
+    private fun stopBluetoothDiscovery() {
+        try { bluetoothAdapter()?.takeIf { it.isDiscovering }?.cancelDiscovery() }
+        catch (_: SecurityException) { }
     }
 
     @Suppress("MissingPermission")

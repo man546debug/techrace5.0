@@ -11,7 +11,7 @@ android {
         applicationId = "br.com.anderson.techrace"
         minSdk = 24
         targetSdk = 34
-        versionCode = 50
+        versionCode = 51
         versionName = "5.0"
     }
 
