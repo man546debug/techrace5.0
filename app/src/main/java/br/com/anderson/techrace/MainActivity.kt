@@ -759,8 +759,11 @@ class MainActivity : Activity() {
                 if (!valid(token)) return@post
                 busy = false
                 if (err != null || data == null) {
-                    toast("Não foi possível ler os ajustes: ${err ?: "resposta inválida"}")
-                    if (resume) resumePolling()
+                    toast("Não foi possível ler a EEPROM: ${err ?: "resposta inválida"}. Você pode salvar no telefone e tentar ler novamente.")
+                    val fallback = draft?.let(::ModuleSettings) ?: ModuleSettings.editableDefaults(rpmCalibration)
+                    settingsSnapshot = fallback
+                    settingsTime = if (draft != null) "Rascunho local; ECU ainda não lida" else "Falha de leitura da ECU"
+                    showModuleAdjustmentEditor(fallback, resume, canWriteToEcu = false)
                     return@post
                 }
                 val current = ModuleSettings(data)
@@ -801,8 +804,8 @@ class MainActivity : Activity() {
                 if (!valid(token)) return@post
                 busy = false
                 if (result == null || errorMessage != null) {
-                    toast("Falha ao ler programação: ${errorMessage ?: "resposta inválida"}")
-                    showModuleAdjustmentEditor(fallback, resumeLiveRead)
+                    toast("Falha ao ler programação: ${errorMessage ?: "resposta inválida"}. O rascunho continua salvo no telefone.")
+                    showModuleAdjustmentEditor(fallback, resumeLiveRead, canWriteToEcu = false)
                     return@post
                 }
                 val settings = ModuleSettings(result)
@@ -816,7 +819,11 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showModuleAdjustmentEditor(settings: ModuleSettings, resumeLiveRead: Boolean) {
+    private fun showModuleAdjustmentEditor(
+        settings: ModuleSettings,
+        resumeLiveRead: Boolean,
+        canWriteToEcu: Boolean = connected && foreground && !demoMode
+    ) {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 12, 28, 12) }
         val fields = mutableMapOf<String, EditText>()
         fun section(label: String) {
@@ -937,10 +944,12 @@ class MainActivity : Activity() {
         updateLambdaEnabled()
 
         val scroll = ScrollView(this).apply { addView(box) }
-        val canWriteNow = connected && foreground && !demoMode
+        val canWriteNow = canWriteToEcu && connected && foreground && !demoMode
         val infoMessage = if (canWriteNow) {
             if (loadLocalSettingsDraft() != null) "Rascunho local. Revise os valores e grave na ECU."
             else "Leitura da ECU: $settingsTime."
+        } else if (connected && foreground && !demoMode) {
+            "Leitura da EEPROM não confirmada. Você pode salvar no telefone; tente ler novamente antes de gravar na ECU."
         } else "Edição disponível sem conexão. Salvará os valores neste telefone; conecte a ECU para gravá-los."
         val readButton = Button(this).apply { text = "Ler programação da central" }
         val saveButton = Button(this).apply {
