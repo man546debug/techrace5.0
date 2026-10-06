@@ -11,8 +11,8 @@ android {
         applicationId = "br.com.anderson.techrace"
         minSdk = 24
         targetSdk = 34
-        versionCode = 53
-        versionName = "5.0.2"
+        versionCode = 54
+        versionName = "5.0.3"
     }
 
     buildTypes {
