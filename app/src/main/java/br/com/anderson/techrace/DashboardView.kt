@@ -56,7 +56,7 @@ class DashboardView(context: Context) : View(context) {
         private set
     var temperatureC: Int? = null
         private set
-    var mixturePercent: Int? = null
+    var mixtureIndex: Int? = null
         set(value) { field = value; invalidate() }
     var mapProgrammed = false
         private set
@@ -81,7 +81,7 @@ class DashboardView(context: Context) : View(context) {
         temperatureC = TechRaceDecoder.temperatureC(data.temperatureRaw)
         // RAM 49 is Y_PERCENT: show the raw internal index even when it is not
         // a display percentage. Hiding values above 100 made the card look stuck.
-        mixturePercent = data.raw6
+        mixtureIndex = data.mixtureIndex
         communicationOk = true
 
         if (rpm > 100) {
@@ -98,7 +98,7 @@ class DashboardView(context: Context) : View(context) {
     fun updateDemoData(data: TechRaceLiveData, temperature: Int, mixture: Int) {
         updateData(data)
         temperatureC = temperature
-        mixturePercent = mixture
+        mixtureIndex = mixture
         mapProgrammed = true
         sondaProgrammed = true
         communicationOk = true
@@ -113,7 +113,7 @@ class DashboardView(context: Context) : View(context) {
         mapVoltage = 0.0
         lambdaMv = 0
         temperatureC = null
-        mixturePercent = null
+        mixtureIndex = null
         mapProgrammed = false
         sondaProgrammed = false
         communicationOk = false
@@ -222,7 +222,7 @@ class DashboardView(context: Context) : View(context) {
         compactCard(c, 1023f, 160f, 245f, 210f, "INJEÇÃO", if (injectionMs > 0) format(injectionMs, 2) else "--", "ms", "PW", green)
         compactCard(c, 1279f, 160f, 245f, 210f, "CORREÇÃO", if (hasData) signed(correction, 1) else "--", "%", "Acréscimo final", orange)
         compactCard(c, 1023f, 385f, 245f, 210f, "TEMP. MOTOR", temperatureC?.toString() ?: "--", "°C", "ECT", red)
-        compactCard(c, 1279f, 385f, 245f, 210f, "MISTURA", mixtureValue(), mixtureUnit(), "Índice interno", yellow)
+        compactCard(c, 1279f, 385f, 245f, 210f, "MISTURA", mixtureValue(), mixtureUnit(), "Índice sonda + MAP", yellow)
 
         drawMainGraphLandscape(c)
         drawStatusesLandscape(c)
@@ -443,12 +443,12 @@ class DashboardView(context: Context) : View(context) {
         card(c,12f,y,w,h,"INJEÇÃO",if(injectionMs>0) format(injectionMs,2) else "--","ms","PW",green,"▰")
         card(c,12f+w+gap,y,w,h,"CORREÇÃO",if(hasData) signed(correction,1) else "--","%","Acréscimo final",orange,"◴")
         card(c,12f+(w+gap)*2,y,w,h,"TEMP. MOTOR",temperatureC?.toString() ?: "--","°C","ECT",red,"♨")
-        card(c,12f+(w+gap)*3,y,w,h,"MISTURA",mixtureValue(),mixtureUnit(),"Índice interno",yellow,"⛽")
+        card(c,12f+(w+gap)*3,y,w,h,"MISTURA",mixtureValue(),mixtureUnit(),"Índice sonda + MAP",yellow,"⛽")
     }
 
-    private fun mixtureValue(): String = mixturePercent?.toString() ?: "--"
+    private fun mixtureValue(): String = mixtureIndex?.toString() ?: "--"
 
-    private fun mixtureUnit(): String = when (val value = mixturePercent) {
+    private fun mixtureUnit(): String = when (val value = mixtureIndex) {
         null -> "%"
         in 0..100 -> "%"
         else -> "raw"
