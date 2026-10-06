@@ -23,6 +23,19 @@ class ModuleSettings(bytes: ByteArray) {
     private fun enabled(mask: Int) = if (u(0) and mask != 0) "Ativado" else "Desativado"
 
     companion object {
+        /**
+         * Apply an offline draft's editable settings over a fresh EEPROM read.
+         * Reserved bytes, current MIX, and the ECU's MAP/RPM programming flags stay intact.
+         */
+        fun mergeEditableDraft(current: ByteArray, draft: ByteArray): ByteArray {
+            require(current.size == 25 && draft.size == 25)
+            val merged = current.copyOf()
+            intArrayOf(3, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24)
+                .forEach { merged[it] = draft[it] }
+            merged[0] = ((current[0].toInt() and 0x03) or (draft[0].toInt() and 0xFC)).toByte()
+            return merged
+        }
+
         /** Edit-ready baseline from the Windows v3.2 screen; only used before the first ECU read. */
         fun editableDefaults(rpmFactor: Double): ModuleSettings {
             val data = ByteArray(25)
