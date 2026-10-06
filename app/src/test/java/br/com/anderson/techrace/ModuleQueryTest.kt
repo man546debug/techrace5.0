@@ -115,6 +115,19 @@ class ModuleQueryTest {
         assertNull(FuelingEstimate.indexDelta(null, 53))
     }
 
+    @Test fun fuelingIndexCalibrationUsesKnownBlendAsAnchor() {
+        val factor = FuelingEstimate.suggestedFactor(80.0, 53)!!
+        assertEquals(80.0 / 53.0, factor, 0.000001)
+        assertEquals(80.0, FuelingEstimate.calibratedPercent(80.0, 53, 53, factor)!!, 0.0001)
+        assertEquals(89.0566, FuelingEstimate.calibratedPercent(80.0, 53, 59, factor)!!, 0.001)
+        assertEquals(70.9434, FuelingEstimate.calibratedPercent(80.0, 53, 47, factor)!!, 0.001)
+        assertEquals(100.0, FuelingEstimate.calibratedPercent(80.0, 53, 100, 5.0)!!, 0.0001)
+        assertNull(FuelingEstimate.calibratedPercent(80.0, 53, 59, 101.0))
+        assertEquals(80.0, FuelingEstimate.calibratedPercent(
+            80.0, 0, 0, FuelingEstimate.suggestedFactor(80.0, 0)
+        )!!, 0.0001)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun rejectPartialSettings() { ModuleSettings(ByteArray(24)) }
 }

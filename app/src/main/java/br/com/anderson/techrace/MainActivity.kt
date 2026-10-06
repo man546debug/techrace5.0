@@ -188,7 +188,7 @@ class MainActivity : Activity() {
                 }
             }
         }
-        dashboard.mixtureReferenceIndex = preferences.getInt("fuel_idx_baseline", -1).takeIf { it >= 0 }
+        syncFuelingCalibration()
         setContentView(dashboard)
         if (preferences.getBoolean("demo_mode", false)) {
             AlertDialog.Builder(this).setTitle("Retomar demonstração?")
@@ -1187,13 +1187,35 @@ class MainActivity : Activity() {
             "Etanol anidro na gasolina (%)",
             preferences.getString("fuel_gasoline_ethanol_percent", "32") ?: "32"
         )
+        val manualFactor = CheckBox(this).apply {
+            text = "Usar fator manual"
+            isChecked = preferences.getBoolean("fuel_factor_manual", false)
+        }
+        val initialEthanol = preferences.getString("fuel_last_ethanol_l", "0")?.replace(',', '.')?.toDoubleOrNull() ?: 0.0
+        val initialGasoline = preferences.getString("fuel_last_gasoline_l", "0")?.replace(',', '.')?.toDoubleOrNull() ?: 0.0
+        val initialGasolineBlend = preferences.getString("fuel_gasoline_ethanol_percent", "32")?.replace(',', '.')?.toDoubleOrNull() ?: 32.0
+        val suggestedFactor = FuelingEstimate.ethanolPercent(
+            initialEthanol, initialGasoline, initialGasolineBlend
+        )?.let { FuelingEstimate.suggestedFactor(it, lastData?.mixtureIndex) }
+        val storedFactor = preferences.getString("fuel_factor_percent_per_idx", null)?.toDoubleOrNull()
+        val factorInitial = String.format(
+            java.util.Locale.US, "%.3f", suggestedFactor ?: storedFactor ?: 1.0
+        )
+        val factorInput = addField("Fator manual (pontos percentuais por idx)", factorInitial)
+        factorInput.isEnabled = manualFactor.isChecked
+        box.addView(manualFactor)
+        box.addView(TextView(this).apply {
+            text = "Estimativa = composição salva + (idx atual − idx do abastecimento) × fator."
+            textSize = 12f
+        })
+        manualFactor.setOnCheckedChangeListener { _, checked -> factorInput.isEnabled = checked }
+
         val savedAt = preferences.getLong("fuel_saved_at", 0L)
         val lastEstimate = preferences.getString("fuel_last_estimate", null)
         val note = if (savedAt > 0L) {
-            "Último abastecimento: estimativa ${lastEstimate ?: "--"}% de etanol. " +
-                "O Δ idx do painel usa a leitura registrada como referência."
+            "Último abastecimento: estimativa ${lastEstimate ?: "--"}% de etanol. O painel usa essa composição como âncora. Se o fator manual estiver desligado, o fator é recalculado ao salvar com os litros informados e o idx atual."
         } else {
-            "Informe os litros deste abastecimento. O app estima o teor de etanol desses volumes e usa o idx atual como referência para acompanhar a variação até o próximo registro."
+            "Informe os litros deste abastecimento. A composição estimada ancora o percentual; o idx acompanha as variações. O fator automático é estimativa e pode ser ajustado manualmente."
         }
         box.addView(TextView(this).apply {
             text = note
@@ -1228,18 +1250,32 @@ class MainActivity : Activity() {
                     return@setOnClickListener
                 }
                 val reference = lastData?.mixtureIndex ?: -1
-                preferences.edit()
+                val useManualFactor = manualFactor.isChecked
+                val factor = if (useManualFactor) value(factorInput)
+                    else FuelingEstimate.suggestedFactor(estimate, reference)
+                if (useManualFactor && (factor == null || factor !in 0.0..100.0)) {
+                    toast("Fator manual inválido. Use um valor entre 0 e 100 pontos percentuais por idx.")
+                    return@setOnClickListener
+                }
+                val editor = preferences.edit()
                     .putString("fuel_last_ethanol_l", ethanolLiters.toString())
                     .putString("fuel_last_gasoline_l", gasolineLiters.toString())
                     .putString("fuel_gasoline_ethanol_percent", gasolineEthanolPercent.toString())
                     .putString("fuel_last_estimate", String.format(java.util.Locale.getDefault(), "%.1f", estimate))
+                    .putString("fuel_base_ethanol_percent", estimate.toString())
+                    .putBoolean("fuel_factor_manual", useManualFactor)
                     .putLong("fuel_saved_at", System.currentTimeMillis())
                     .putInt("fuel_idx_baseline", reference)
-                    .apply()
-                dashboard.mixtureReferenceIndex = reference.takeIf { it >= 0 }
+                if (factor != null) editor.putString("fuel_factor_percent_per_idx", factor.toString())
+                else editor.remove("fuel_factor_percent_per_idx")
+                editor.apply()
+                syncFuelingCalibration()
+                val factorText = factor?.let {
+                    " Fator: " + String.format(java.util.Locale.getDefault(), "%.3f", it) + " pp/idx."
+                } ?: " O fator será calculado quando houver leitura do idx."
                 toast(
-                    "Abastecimento salvo: estimativa ${String.format(java.util.Locale.getDefault(), "%.1f", estimate)}% de etanol. " +
-                        "Variação do idx reiniciada."
+                    "Abastecimento salvo: estimativa ${String.format(java.util.Locale.getDefault(), "%.1f", estimate)}% de etanol." +
+                        factorText + " Variação reiniciada."
                 )
                 dialog.dismiss()
             }
@@ -1252,9 +1288,25 @@ class MainActivity : Activity() {
         var reference = preferences.getInt("fuel_idx_baseline", -1)
         if (reference < 0) {
             reference = data.mixtureIndex ?: return
-            preferences.edit().putInt("fuel_idx_baseline", reference).apply()
+            val editor = preferences.edit().putInt("fuel_idx_baseline", reference)
+            if (!preferences.getBoolean("fuel_factor_manual", false)) {
+                val knownPercent = preferences.getString("fuel_base_ethanol_percent", null)?.toDoubleOrNull()
+                FuelingEstimate.suggestedFactor(knownPercent, reference)?.let {
+                    editor.putString("fuel_factor_percent_per_idx", it.toString())
+                }
+            }
+            editor.apply()
         }
-        dashboard.mixtureReferenceIndex = reference
+        syncFuelingCalibration()
+    }
+
+    private fun syncFuelingCalibration() {
+        dashboard.mixtureReferenceIndex =
+            preferences.getInt("fuel_idx_baseline", -1).takeIf { it >= 0 }
+        dashboard.mixtureReferenceEthanolPercent =
+            preferences.getString("fuel_base_ethanol_percent", null)?.toDoubleOrNull()
+        dashboard.mixtureFactorPercentPerIndex =
+            preferences.getString("fuel_factor_percent_per_idx", null)?.toDoubleOrNull()
     }
 
     private fun setDemoMode(enabled: Boolean) {

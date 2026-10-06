@@ -60,6 +60,10 @@ class DashboardView(context: Context) : View(context) {
         set(value) { field = value; invalidate() }
     var mixtureReferenceIndex: Int? = null
         set(value) { field = value; invalidate() }
+    var mixtureReferenceEthanolPercent: Double? = null
+        set(value) { field = value; invalidate() }
+    var mixtureFactorPercentPerIndex: Double? = null
+        set(value) { field = value; invalidate() }
     var mapProgrammed = false
         private set
     var sondaProgrammed = false
@@ -448,16 +452,28 @@ class DashboardView(context: Context) : View(context) {
         card(c,12f+(w+gap)*3,y,w,h,"MISTURA",mixtureValue(),mixtureUnit(),mixtureSubtitle(),yellow,"⛽")
     }
 
-    private fun mixtureValue(): String = mixtureIndex?.toString() ?: "--"
+    private fun estimatedMixturePercent(): Double? = FuelingEstimate.calibratedPercent(
+        mixtureReferenceEthanolPercent,
+        mixtureReferenceIndex,
+        mixtureIndex,
+        mixtureFactorPercentPerIndex
+    )
 
-    private fun mixtureUnit(): String = "idx"
+    private fun mixtureValue(): String {
+        val estimate = estimatedMixturePercent()
+        return if (estimate != null) String.format(Locale.US, "%.0f", estimate)
+            else mixtureIndex?.toString() ?: "--"
+    }
+
+    private fun mixtureUnit(): String = if (estimatedMixturePercent() != null) "%" else "idx"
 
     private fun mixtureSubtitle(): String {
         val current = mixtureIndex ?: return "Índice sonda + MAP"
-        val reference = mixtureReferenceIndex ?: return "Sem referência de abastecimento"
-        val delta = FuelingEstimate.indexDelta(current, reference) ?: return "Sem referência de abastecimento"
+        val reference = mixtureReferenceIndex ?: return "Registre abastecimento"
+        val delta = FuelingEstimate.indexDelta(current, reference) ?: return "Registre abastecimento"
         val signed = if (delta >= 0) "+$delta" else delta.toString()
-        return "Δ $signed idx desde abastecimento"
+        return if (estimatedMixturePercent() != null) "Est. · idx $current Δ$signed"
+            else "idx $current · Δ $signed"
     }
 
     private fun card(c:Canvas,x:Float,y:Float,w:Float,h:Float,title:String,value:String,unit:String,subtitle:String,color:Int,icon:String) {
