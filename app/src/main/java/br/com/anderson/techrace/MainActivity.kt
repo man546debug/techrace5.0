@@ -188,6 +188,7 @@ class MainActivity : Activity() {
                 }
             }
         }
+        dashboard.mixtureReferenceIndex = preferences.getInt("fuel_idx_baseline", -1).takeIf { it >= 0 }
         setContentView(dashboard)
         if (preferences.getBoolean("demo_mode", false)) {
             AlertDialog.Builder(this).setTitle("Retomar demonstração?")
@@ -1123,7 +1124,8 @@ class MainActivity : Activity() {
             if (demoMode) "Desativar modo demonstração" else "Ativar modo demonstração",
             if (connected) "Reconectar" else "Conectar",
             if (polling) "Parar leitura contínua" else "Iniciar leitura contínua",
-            "Ler uma vez", "Desconectar", "Sobre", "Consultar módulo / EEPROM", "Exportar telemetria CSV", "Limpar histórico CSV"
+            "Ler uma vez", "Desconectar", "Sobre", "Consultar módulo / EEPROM", "Exportar telemetria CSV", "Limpar histórico CSV",
+            "Registrar abastecimento"
         )
         AlertDialog.Builder(this).setTitle("Configurações").setItems(items) { _, index ->
             when (index) {
@@ -1151,8 +1153,108 @@ class MainActivity : Activity() {
                 7 -> showModuleMenu()
                 8 -> exportDocument("techrace-telemetria.csv", "text/csv", csvContent())
                 9 -> { csvRows.clear(); toast("Histórico CSV limpo") }
+                10 -> showFuelingDialog()
             }
         }.show()
+    }
+
+    private fun showFuelingDialog() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(28, 12, 28, 12)
+        }
+        fun addField(label: String, initial: String): EditText {
+            box.addView(TextView(this).apply { text = label; textSize = 14f })
+            val input = EditText(this).apply {
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                    android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+                setSingleLine(true)
+                setText(initial)
+                hint = "0,0"
+            }
+            box.addView(input)
+            return input
+        }
+        val ethanol = addField(
+            "Etanol abastecido (litros)",
+            preferences.getString("fuel_last_ethanol_l", "0") ?: "0"
+        )
+        val gasoline = addField(
+            "Gasolina abastecida (litros)",
+            preferences.getString("fuel_last_gasoline_l", "0") ?: "0"
+        )
+        val gasolineBlend = addField(
+            "Etanol anidro na gasolina (%)",
+            preferences.getString("fuel_gasoline_ethanol_percent", "32") ?: "32"
+        )
+        val savedAt = preferences.getLong("fuel_saved_at", 0L)
+        val lastEstimate = preferences.getString("fuel_last_estimate", null)
+        val note = if (savedAt > 0L) {
+            "Último abastecimento: estimativa ${lastEstimate ?: "--"}% de etanol. " +
+                "O Δ idx do painel usa a leitura registrada como referência."
+        } else {
+            "Informe os litros deste abastecimento. O app estima o teor de etanol desses volumes e usa o idx atual como referência para acompanhar a variação até o próximo registro."
+        }
+        box.addView(TextView(this).apply {
+            text = note
+            textSize = 13f
+            setPadding(0, 12, 0, 0)
+        })
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Registrar abastecimento")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Salvar abastecimento", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                fun value(edit: EditText): Double? =
+                    edit.text.toString().trim().replace(',', '.').toDoubleOrNull()
+                val ethanolLiters = value(ethanol)
+                val gasolineLiters = value(gasoline)
+                val gasolineEthanolPercent = value(gasolineBlend)
+                if (ethanolLiters == null || gasolineLiters == null ||
+                    gasolineEthanolPercent == null ||
+                    ethanolLiters < 0.0 || gasolineLiters < 0.0 ||
+                    gasolineEthanolPercent !in 0.0..100.0 ||
+                    ethanolLiters + gasolineLiters <= 0.0) {
+                    toast("Informe litros válidos e um total maior que zero")
+                    return@setOnClickListener
+                }
+                val estimate = FuelingEstimate.ethanolPercent(
+                    ethanolLiters, gasolineLiters, gasolineEthanolPercent
+                ) ?: run {
+                    toast("Não foi possível calcular a mistura")
+                    return@setOnClickListener
+                }
+                val reference = lastData?.mixtureIndex ?: -1
+                preferences.edit()
+                    .putString("fuel_last_ethanol_l", ethanolLiters.toString())
+                    .putString("fuel_last_gasoline_l", gasolineLiters.toString())
+                    .putString("fuel_gasoline_ethanol_percent", gasolineEthanolPercent.toString())
+                    .putString("fuel_last_estimate", String.format(java.util.Locale.getDefault(), "%.1f", estimate))
+                    .putLong("fuel_saved_at", System.currentTimeMillis())
+                    .putInt("fuel_idx_baseline", reference)
+                    .apply()
+                dashboard.mixtureReferenceIndex = reference.takeIf { it >= 0 }
+                toast(
+                    "Abastecimento salvo: estimativa ${String.format(java.util.Locale.getDefault(), "%.1f", estimate)}% de etanol. " +
+                        "Variação do idx reiniciada."
+                )
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun updateFuelIndexReference(data: TechRaceLiveData) {
+        if (preferences.getLong("fuel_saved_at", 0L) <= 0L) return
+        var reference = preferences.getInt("fuel_idx_baseline", -1)
+        if (reference < 0) {
+            reference = data.mixtureIndex ?: return
+            preferences.edit().putInt("fuel_idx_baseline", reference).apply()
+        }
+        dashboard.mixtureReferenceIndex = reference
     }
 
     private fun setDemoMode(enabled: Boolean) {
@@ -1475,6 +1577,7 @@ class MainActivity : Activity() {
                         val data = TechRaceDecoder.decode(payload, rpmCalibration)
                         lastData = data
                         dashboard.updateData(data)
+                        updateFuelIndexReference(data)
                         appendCsv(data, false)
                         lastError = "Nenhum"
                         lastValid = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())

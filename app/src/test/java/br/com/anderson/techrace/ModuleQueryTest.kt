@@ -102,6 +102,19 @@ class ModuleQueryTest {
         assertTrue(kotlin.math.abs(settings.temperature(15) - 82) <= 2)
     }
 
+    @Test fun fuelingEstimateIncludesEthanolAlreadyInGasoline() {
+        assertEquals(80.0, FuelingEstimate.ethanolPercent(12.0, 5.0, 32.0)!!, 0.0001)
+        assertEquals(70.5882, FuelingEstimate.ethanolPercent(12.0, 5.0, 0.0)!!, 0.001)
+        assertNull(FuelingEstimate.ethanolPercent(0.0, 0.0, 32.0))
+        assertNull(FuelingEstimate.ethanolPercent(1.0, 1.0, 101.0))
+    }
+
+    @Test fun indexDeltaIsRelativeToSavedFuelingReference() {
+        assertEquals(7, FuelingEstimate.indexDelta(60, 53))
+        assertEquals(-4, FuelingEstimate.indexDelta(49, 53))
+        assertNull(FuelingEstimate.indexDelta(null, 53))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun rejectPartialSettings() { ModuleSettings(ByteArray(24)) }
 }

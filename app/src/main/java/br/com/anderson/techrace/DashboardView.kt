@@ -58,6 +58,8 @@ class DashboardView(context: Context) : View(context) {
         private set
     var mixtureIndex: Int? = null
         set(value) { field = value; invalidate() }
+    var mixtureReferenceIndex: Int? = null
+        set(value) { field = value; invalidate() }
     var mapProgrammed = false
         private set
     var sondaProgrammed = false
@@ -222,7 +224,7 @@ class DashboardView(context: Context) : View(context) {
         compactCard(c, 1023f, 160f, 245f, 210f, "INJEÇÃO", if (injectionMs > 0) format(injectionMs, 2) else "--", "ms", "PW", green)
         compactCard(c, 1279f, 160f, 245f, 210f, "CORREÇÃO", if (hasData) signed(correction, 1) else "--", "%", "Acréscimo final", orange)
         compactCard(c, 1023f, 385f, 245f, 210f, "TEMP. MOTOR", temperatureC?.toString() ?: "--", "°C", "ECT", red)
-        compactCard(c, 1279f, 385f, 245f, 210f, "MISTURA", mixtureValue(), mixtureUnit(), "Índice sonda + MAP", yellow)
+        compactCard(c, 1279f, 385f, 245f, 210f, "MISTURA", mixtureValue(), mixtureUnit(), mixtureSubtitle(), yellow)
 
         drawMainGraphLandscape(c)
         drawStatusesLandscape(c)
@@ -443,12 +445,20 @@ class DashboardView(context: Context) : View(context) {
         card(c,12f,y,w,h,"INJEÇÃO",if(injectionMs>0) format(injectionMs,2) else "--","ms","PW",green,"▰")
         card(c,12f+w+gap,y,w,h,"CORREÇÃO",if(hasData) signed(correction,1) else "--","%","Acréscimo final",orange,"◴")
         card(c,12f+(w+gap)*2,y,w,h,"TEMP. MOTOR",temperatureC?.toString() ?: "--","°C","ECT",red,"♨")
-        card(c,12f+(w+gap)*3,y,w,h,"MISTURA",mixtureValue(),mixtureUnit(),"Índice sonda + MAP",yellow,"⛽")
+        card(c,12f+(w+gap)*3,y,w,h,"MISTURA",mixtureValue(),mixtureUnit(),mixtureSubtitle(),yellow,"⛽")
     }
 
     private fun mixtureValue(): String = mixtureIndex?.toString() ?: "--"
 
     private fun mixtureUnit(): String = "idx"
+
+    private fun mixtureSubtitle(): String {
+        val current = mixtureIndex ?: return "Índice sonda + MAP"
+        val reference = mixtureReferenceIndex ?: return "Sem referência de abastecimento"
+        val delta = FuelingEstimate.indexDelta(current, reference) ?: return "Sem referência de abastecimento"
+        val signed = if (delta >= 0) "+$delta" else delta.toString()
+        return "Δ $signed idx desde abastecimento"
+    }
 
     private fun card(c:Canvas,x:Float,y:Float,w:Float,h:Float,title:String,value:String,unit:String,subtitle:String,color:Int,icon:String) {
         roundPanel(c,x,y,w,h,17f)
