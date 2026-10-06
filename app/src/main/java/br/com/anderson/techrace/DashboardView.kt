@@ -448,11 +448,7 @@ class DashboardView(context: Context) : View(context) {
 
     private fun mixtureValue(): String = mixtureIndex?.toString() ?: "--"
 
-    private fun mixtureUnit(): String = when (val value = mixtureIndex) {
-        null -> "%"
-        in 0..100 -> "%"
-        else -> "raw"
-    }
+    private fun mixtureUnit(): String = "idx"
 
     private fun card(c:Canvas,x:Float,y:Float,w:Float,h:Float,title:String,value:String,unit:String,subtitle:String,color:Int,icon:String) {
         roundPanel(c,x,y,w,h,17f)
