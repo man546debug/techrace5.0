@@ -58,6 +58,20 @@ class ModuleQueryTest {
         assertTrue(text.contains("Limite máximo de correção: 34.38 %"))
     }
 
+    @Test fun mergingDraftPreservesReservedBytesAndProgrammingFlags() {
+        val current = ByteArray(25) { (it + 10).toByte() }.also { it[0] = 0x03 }
+        val draft = ByteArray(25) { (it + 100).toByte() }.also { it[0] = 0xFC }
+        val merged = ModuleSettings.mergeEditableDraft(current, draft)
+        val editable = setOf(3, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24)
+        for (i in 1 until 25) {
+            if (i in editable) assertEquals("editable offset $i", draft[i], merged[i])
+            else assertEquals("preserved offset $i", current[i], merged[i])
+        }
+        assertEquals(0x03, merged[0].toInt() and 0x03)
+        assertEquals(0xFC, merged[0].toInt() and 0xFC)
+        assertEquals(current[2], merged[2]) // current manual mixture is preserved
+    }
+
     @Test fun adjustmentTemperatureEncodingMatchesPrincipalCpp() {
         val bytes = ByteArray(25)
         val expected = TechRaceDecoder.temperatureC(ModuleSettings.encodeTemperature(35.0))
