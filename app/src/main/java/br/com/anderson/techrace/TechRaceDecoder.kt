@@ -1,6 +1,7 @@
 package br.com.anderson.techrace
 
 import kotlin.math.ln
+import kotlin.math.roundToInt
 
 data class TechRaceLiveData(
     val rpm: Double,
@@ -11,9 +12,23 @@ data class TechRaceLiveData(
     val temperatureRaw: Int,
     val mapVoltage: Double,
     val lambdaMv: Int
-)
+) {
+    val mixtureIndex: Int?
+        get() = TechRaceDecoder.estimatedMixtureIndex(mapVoltage, lambdaMv)
+}
 
 object TechRaceDecoder {
+    /**
+     * Combined display index from the TechRace live MAP (0..2.5 V) and Lambda
+     * (0..5000 mV) channels. This is a unitless sensor index, not ethanol % or AFR.
+     */
+    fun estimatedMixtureIndex(mapVoltage: Double, lambdaMv: Int): Int? {
+        if (!mapVoltage.isFinite() || mapVoltage !in 0.0..2.5 || lambdaMv !in 0..5000) return null
+        val mapScale = mapVoltage / 2.5
+        val lambdaScale = lambdaMv / 5000.0
+        return (((mapScale + lambdaScale) / 2.0) * 100.0).roundToInt()
+    }
+
     fun decode(data: ByteArray, rpmCalibration: Double = 1.0): TechRaceLiveData {
         require(data.size == 10) { "Payload deve ter exatamente 10 bytes" }
         require(rpmCalibration.isFinite() && rpmCalibration > 0)
