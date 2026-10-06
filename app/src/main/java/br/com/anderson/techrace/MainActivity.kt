@@ -761,8 +761,16 @@ class MainActivity : Activity() {
 
     private fun showModuleAdjustmentEditor(settings: ModuleSettings, resumeLiveRead: Boolean) {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(28, 12, 28, 12) }
-        val fields = mutableListOf<EditText>()
-        fun field(label: String, initial: String, decimals: Boolean = false): EditText {
+        val fields = mutableMapOf<String, EditText>()
+        fun section(label: String) {
+            box.addView(TextView(this).apply {
+                text = label
+                textSize = 18f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, 20, 0, 4)
+            })
+        }
+        fun field(key: String, label: String, initial: String, decimals: Boolean = false): EditText {
             box.addView(TextView(this).apply { text = label })
             val edit = EditText(this).apply {
                 inputType = android.text.InputType.TYPE_CLASS_NUMBER or
@@ -771,66 +779,167 @@ class MainActivity : Activity() {
                 setText(initial)
             }
             box.addView(edit)
-            fields += edit
+            fields[key] = edit
             return edit
         }
+        fun check(label: String, mask: Int): CheckBox = CheckBox(this).apply {
+            text = label
+            isChecked = settings.raw[0].toInt() and mask != 0
+            box.addView(this)
+        }
+        fun number(key: String): Double = fields.getValue(key).text.toString().trim()
+            .replace(',', '.').toDoubleOrNull() ?: error("Preencha todos os campos com números válidos")
+
         val raw = settings.raw
         fun u(i: Int) = raw[i].toInt() and 255
-        fun pct(i: Int) = String.format(java.util.Locale.US, "%.1f", u(i) * 100.0 / 64.0)
-        fun targetRpm(): Int {
-            val ticks = u(4) + 256 * u(5)
-            return if (ticks == 0) 850 else (60_000_000.0 / (ticks * 3.2 * rpmCalibration)).toInt()
+        fun pct(i: Int) = String.format(java.util.Locale.US, "%.4f", u(i) * 100.0 / 64.0)
+        section("Partida à frio")
+        field("coldTime", "Tempo de injeção (0–4000 ms)",
+            ModuleSettings.crankingDurationMilliseconds(u(12), u(13)).toString())
+        field("coldTemp", "Temp. máx. (15–35 °C)", settings.temperature(17).toString())
+        field("initialMix", "Mist. inicial (10–limite máx. %)", pct(14), true)
+        val externalStart = check("Partida externa", 0x04)
+        val limitedByIdle = check("Limitado pela lenta", 0x08)
+
+        section("Aquecimento do motor")
+        val heatingEnabled = check("Aquecimento do motor ativado", 0x80)
+        val heatInjection = field("heatInjection", "Injeção Extra (0–10 %)", pct(21), true)
+        val heatTemperature = field("heatTemperature", "Temp. máx. (35–60 °C)", settings.temperature(16).toString())
+        fun updateHeatEnabled() {
+            heatInjection.isEnabled = heatingEnabled.isChecked
+            heatTemperature.isEnabled = heatingEnabled.isChecked
         }
-        field("RPM alvo (600–1500)", targetRpm().toString())
-        field("Limite máximo de correção (%) (10–60)", pct(3), true)
-        field("Temperatura mínima da mistura (°C) (15–35)", settings.temperature(17).toString())
-        field("Temperatura limite da injeção extra (°C) (35–60)", settings.temperature(16).toString())
-        field("Temperatura de liberação da correção (°C) (0–100)", settings.temperature(15).toString())
-        field("Limiar da mistura para partida/delta (%) (10–limite máximo)", pct(14), true)
-        field("Extra de aceleração rápida (%) (0–30)", pct(20), true)
-        field("Variação inicial da aceleração (µs) (200–15000)", String.format(java.util.Locale.US, "%.0f", (u(18) + 256 * u(19)) * 0.8), true)
-        field("Injeção extra a frio (%) (0–10)", pct(21), true)
+        heatingEnabled.setOnCheckedChangeListener { _, _ -> updateHeatEnabled() }
+        updateHeatEnabled()
+
+        section("Correção")
+        field("maxCorrection", "Correção Máx. (10–60 %)", pct(3), true)
+        field("correctionTemperature", "Temperatura Máx. (0–100 °C)", settings.temperature(15).toString())
+
+        section("Aceleração rápida")
+        val rapidEnabled = check("Aceleração Rápida ativada", 0x40)
+        val rapidVariation = field("rapidVariation", "Variação Mínima (200–15000 µs)",
+            ModuleSettings.rapidVariationMicroseconds(u(18), u(19)).toString(), true)
+        val rapidExtra = field("rapidExtra", "Tempo Extra a 20 ms (0–30 %)", pct(20), true)
+        fun updateRapidEnabled() {
+            rapidVariation.isEnabled = rapidEnabled.isChecked
+            rapidExtra.isEnabled = rapidEnabled.isChecked
+        }
+        rapidEnabled.setOnCheckedChangeListener { _, _ -> updateRapidEnabled() }
+        updateRapidEnabled()
+
+        section("Ajuste do RPM marcha-lenta")
+        val ticks = u(4) + 256 * u(5)
+        val rpmValue = field("rpm", "RPM Lenta (600–1500 RPM)",
+            if (ticks == 0) "850" else ModuleSettings.rpmTarget(ticks, rpmCalibration).toString())
+        val rpmButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val rpmDown = Button(this).apply { text = "RPM −25" }
+        val rpmUp = Button(this).apply { text = "RPM +25" }
+        rpmButtons.addView(rpmDown, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        rpmButtons.addView(rpmUp, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        box.addView(rpmButtons)
+        fun stepRpm(delta: Int) {
+            val current = rpmValue.text.toString().toIntOrNull() ?: 850
+            rpmValue.setText((current + delta).coerceIn(600, 1500).toString())
+        }
+        rpmDown.setOnClickListener { stepRpm(-25) }
+        rpmUp.setOnClickListener { stepRpm(25) }
+        box.addView(TextView(this).apply { text = "RPM Cal. (equivalente ao EXE):" })
+        val rpmFactors = listOf(1, 2, 4, 8)
+        val rpmFactor = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, rpmFactors)
+            setSelection(rpmFactors.indexOf(rpmCalibration.toInt()).coerceAtLeast(0))
+        }
+        box.addView(rpmFactor)
+
+        section("Lambda lenta")
+        val lambdaEnabled = check("Lambda Lenta ativada", 0x10)
+        val lambdaTime = field("lambdaTime", "Tempo Ajuste (10–50 s)", (u(24) * 0.21).toInt().toString())
+        val lambdaValue = field("lambdaValue", "Valor Lambda (0–1000 mV)",
+            ((u(22) * 5000.0 / 255.0).toInt()).toString())
+        val widebandEnabled = check("WideBand Sensor", 0x20)
+        fun updateLambdaEnabled() {
+            lambdaTime.isEnabled = lambdaEnabled.isChecked
+            lambdaValue.isEnabled = lambdaEnabled.isChecked
+            widebandEnabled.isEnabled = lambdaEnabled.isChecked
+        }
+        lambdaEnabled.setOnCheckedChangeListener { _, _ -> updateLambdaEnabled() }
+        updateLambdaEnabled()
+
         val scroll = ScrollView(this).apply { addView(box) }
         val dialog = AlertDialog.Builder(this).setTitle("Ajustes do módulo")
-            .setMessage("Valores lidos em $settingsTime. Salvará os campos abaixo e manterá os demais.")
+            .setMessage("Campos e opções equivalentes ao programa Windows. Leitura: $settingsTime.")
             .setView(scroll).setNegativeButton("Cancelar") { _, _ -> if (resumeLiveRead) resumePolling() }
-            .setPositiveButton("Gravar") { _, _ ->
+            .setPositiveButton("Gravar", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
-                    val values = fields.map { it.text.toString().trim().replace(',', '.').toDoubleOrNull()
-                        ?: error("Preencha todos os campos com números válidos") }
-                    val rpm = values[0]
-                    val maxCorrection = values[1]
-                    val coldTemp = values[2]
-                    val extraTemp = values[3]
-                    val releaseTemp = values[4]
-                    val mixThreshold = values[5]
-                    val accelExtra = values[6]
-                    val deltaUs = values[7]
-                    val coldExtra = values[8]
+                    val coldTime = number("coldTime")
+                    val coldTemp = number("coldTemp")
+                    val initialMix = number("initialMix")
+                    val heatInjectionPercent = number("heatInjection")
+                    val heatTemp = number("heatTemperature")
+                    val maxCorrection = number("maxCorrection")
+                    val correctionTemp = number("correctionTemperature")
+                    val variationUs = number("rapidVariation")
+                    val extraAt20Ms = number("rapidExtra")
+                    val rpm = number("rpm")
+                    val lambdaSeconds = number("lambdaTime")
+                    val lambdaMv = number("lambdaValue")
                     require(rpm in 600.0..1500.0) { "RPM alvo deve estar entre 600 e 1500" }
+                    require(coldTime in 0.0..4000.0) { "Tempo de injeção deve ficar entre 0 e 4000 ms" }
+                    require(coldTemp in 15.0..35.0) { "Temp. máx. da partida a frio deve ficar entre 15 e 35 °C" }
                     require(maxCorrection in 10.0..60.0) { "Limite máximo deve estar entre 10% e 60%" }
-                    require(coldTemp in 15.0..35.0) { "Temperatura da mistura deve estar entre 15 e 35 °C" }
-                    require(extraTemp in 35.0..60.0) { "Temperatura da injeção extra deve estar entre 35 e 60 °C" }
-                    require(releaseTemp in 0.0..100.0) { "Temperatura de liberação deve estar entre 0 e 100 °C" }
-                    require(mixThreshold in 10.0..maxCorrection) { "Limiar da mistura deve ficar entre 10% e o limite máximo" }
-                    require(accelExtra in 0.0..30.0) { "Extra de aceleração deve ficar entre 0% e 30%" }
-                    require(deltaUs in 200.0..15000.0) { "Variação inicial deve ficar entre 200 e 15000 µs" }
-                    require(coldExtra in 0.0..10.0) { "Injeção extra a frio deve ficar entre 0% e 10%" }
+                    require(initialMix in 10.0..maxCorrection) { "Mistura inicial deve ficar entre 10% e a correção máxima" }
+                    require(correctionTemp in 0.0..100.0) { "Temperatura máxima da correção deve ficar entre 0 e 100 °C" }
+
                     val changed = settings.raw.copyOf()
                     fun putPct(index: Int, value: Double) { changed[index] = TechRaceProtocol.encodePercent(value).toByte() }
-                    putPct(3, maxCorrection)
-                    val ticks = (60_000_000.0 / (rpm * 3.2 * rpmCalibration)).toInt().coerceIn(1, 65535)
-                    changed[4] = ticks.toByte(); changed[5] = (ticks shr 8).toByte()
-                    putPct(14, mixThreshold)
+                    fun setFlag(mask: Int, enabled: Boolean) {
+                        val current = changed[0].toInt() and 255
+                        changed[0] = (if (enabled) current or mask else current and mask.inv()).toByte()
+                    }
+
+                    val coldTicks = ModuleSettings.crankingDurationTicks(coldTime.toInt())
+                    changed[12] = coldTicks.toByte(); changed[13] = (coldTicks shr 8).toByte()
+                    putPct(14, initialMix)
                     changed[17] = ModuleSettings.encodeTemperature(coldTemp).toByte()
-                    changed[16] = ModuleSettings.encodeTemperature(extraTemp).toByte()
-                    changed[15] = ModuleSettings.encodeTemperature(releaseTemp).toByte()
-                    val delta = (deltaUs / 0.8).toInt().coerceIn(0, 65535)
-                    changed[18] = delta.toByte(); changed[19] = (delta shr 8).toByte()
-                    putPct(20, accelExtra); putPct(21, coldExtra)
-                    writeModuleSettings(changed, resumeLiveRead)
-                } catch (e: Exception) { toast(e.message ?: "Valores inválidos"); if (resumeLiveRead) resumePolling() }
-            }.create()
+                    if (heatingEnabled.isChecked) {
+                        require(heatInjectionPercent in 0.0..10.0) { "Injeção extra deve ficar entre 0% e 10%" }
+                        require(heatTemp in 35.0..60.0) { "Temp. máx. do aquecimento deve ficar entre 35 e 60 °C" }
+                        putPct(21, heatInjectionPercent)
+                        changed[16] = ModuleSettings.encodeTemperature(heatTemp).toByte()
+                    }
+                    putPct(3, maxCorrection)
+                    changed[15] = ModuleSettings.encodeTemperature(correctionTemp).toByte()
+                    val rpmCalibrationToSave = rpmFactors[rpmFactor.selectedItemPosition].toDouble()
+                    val rpmTicks = ModuleSettings.rpmTicks(rpm.toInt(), rpmCalibrationToSave)
+                    changed[4] = rpmTicks.toByte(); changed[5] = (rpmTicks shr 8).toByte()
+                    if (rapidEnabled.isChecked) {
+                        require(variationUs in 200.0..15000.0) { "Variação mínima deve ficar entre 200 e 15000 µs" }
+                        require(extraAt20Ms in 0.0..30.0) { "Tempo extra a 20 ms deve ficar entre 0% e 30%" }
+                        val variationTicks = ModuleSettings.rapidVariationTicks(variationUs.toInt())
+                        changed[18] = variationTicks.toByte(); changed[19] = (variationTicks shr 8).toByte()
+                        putPct(20, extraAt20Ms)
+                    }
+                    if (lambdaEnabled.isChecked) {
+                        require(lambdaSeconds in 10.0..50.0) { "Tempo de ajuste deve ficar entre 10 e 50 s" }
+                        require(lambdaMv in 0.0..1000.0) { "Valor Lambda deve ficar entre 0 e 1000 mV" }
+                        changed[24] = ModuleSettings.lambdaAdjustmentRaw(lambdaSeconds.toInt()).toByte()
+                        changed[22] = ModuleSettings.lambdaThresholdRaw(lambdaMv.toInt()).toByte()
+                    }
+                    setFlag(0x04, externalStart.isChecked)
+                    setFlag(0x08, limitedByIdle.isChecked)
+                    setFlag(0x10, lambdaEnabled.isChecked)
+                    setFlag(0x20, widebandEnabled.isChecked)
+                    setFlag(0x40, rapidEnabled.isChecked)
+                    setFlag(0x80, heatingEnabled.isChecked)
+                    writeModuleSettings(changed, resumeLiveRead, rpmCalibrationToSave)
+                    dialog.dismiss()
+                } catch (e: Exception) { toast(e.message ?: "Valores inválidos") }
+            }
+        }
         dialog.setOnCancelListener { if (resumeLiveRead) resumePolling() }
         dialog.show()
     }
@@ -844,7 +953,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun writeModuleSettings(settings: ByteArray, resume: Boolean) {
+    private fun writeModuleSettings(settings: ByteArray, resume: Boolean, rpmFactorToSave: Double) {
         val token = generation
         busy = true
         polling = false
@@ -867,6 +976,8 @@ class MainActivity : Activity() {
                 if (err != null || result == null) {
                     toast("Falha ao gravar ajustes: ${err ?: "verificação inválida"}")
                 } else {
+                    rpmCalibration = rpmFactorToSave
+                    preferences.edit().putInt("rpm_factor", rpmCalibration.toInt()).apply()
                     settingsSnapshot = ModuleSettings(result)
                     settingsTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
                     moduleReport = settingsSnapshot!!.describe(rpmCalibration)
@@ -1320,7 +1431,7 @@ class MainActivity : Activity() {
     }
 
     /** All additional requests use the selected serial transport on the single I/O executor. */
-    private fun queryModule(kind: Int) {
+    private fun queryModule(kind: Int, showResult: Boolean = true) {
         if (demoMode || !connected || !foreground) { toast("Conecte o leitor em modo real"); return }
         if (busy) { toast("Leitura em andamento; tente novamente"); return }
         val tx = when (kind) {
@@ -1379,13 +1490,15 @@ class MainActivity : Activity() {
                             firmwareVersion = "${result[0].toInt() and 255}.${result[1].toInt() and 255}"
                             moduleReport = "Firmware informado: $firmwareVersion\n$wire"
                             toast("Firmware do módulo: $firmwareVersion")
+                            // Load the EXE-equivalent option flags immediately after connecting.
+                            queryModule(1, showResult = false)
                         }
                         1 -> {
                             settingsSnapshot = ModuleSettings(result)
                             settingsTime = snapshotTime
                             dashboard.updateProgrammingFlags(settingsSnapshot!!.mapFlag, settingsSnapshot!!.rpmFlag)
                             moduleReport = settingsSnapshot!!.describe(rpmCalibration) + "\n" + wire
-                            showText("EEPROM — firmware $firmwareVersion", moduleReport)
+                            if (showResult) showText("EEPROM — firmware $firmwareVersion", moduleReport)
                         }
                         else -> {
                             fun u(i: Int) = result[i].toInt() and 255
@@ -1404,7 +1517,7 @@ class MainActivity : Activity() {
                             showText("RAM adicional", moduleReport)
                         }
                     }
-                    if (polling) handler.postDelayed(pollTask, pollingIntervalMs)
+                    if (polling && !busy) handler.postDelayed(pollTask, pollingIntervalMs)
                 }
             }
         }

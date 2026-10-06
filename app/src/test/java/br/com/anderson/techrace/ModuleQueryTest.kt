@@ -67,6 +67,19 @@ class ModuleQueryTest {
         assertTrue(kotlin.math.abs(ModuleSettings(bytes).temperature(17) - 25) <= 2)
     }
 
+    @Test fun windowsFlexFieldsUseTheSameEepromScales() {
+        // Values visible in the Windows Flex Programável screen.
+        assertEquals(3000, ModuleSettings.crankingDurationTicks(2460))
+        assertEquals(2460, ModuleSettings.crankingDurationMilliseconds(0xB8, 0x0B))
+        assertEquals(13, TechRaceProtocol.encodePercent(20.3125)) // Mist. Inicial, EEPROM offset 14
+        assertEquals(25, ModuleSettings.lambdaThresholdRaw(490))
+        assertEquals(67, ModuleSettings.lambdaAdjustmentRaw(14))
+        assertEquals(500, ModuleSettings.rapidVariationTicks(400))
+        assertEquals(400, ModuleSettings.rapidVariationMicroseconds(0xF4, 1))
+        val rpmTicks = ModuleSettings.rpmTicks(980, 1.0)
+        assertEquals(980, ModuleSettings.rpmTarget(rpmTicks, 1.0))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun rejectPartialSettings() { ModuleSettings(ByteArray(24)) }
 }
