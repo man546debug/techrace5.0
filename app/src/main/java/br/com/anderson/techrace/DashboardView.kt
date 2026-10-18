@@ -2,7 +2,6 @@ package br.com.anderson.techrace
 
 import android.content.Context
 import android.graphics.*
-import android.graphics.drawable.ColorDrawable
 import android.view.MotionEvent
 import android.view.View
 import java.text.SimpleDateFormat
@@ -154,209 +153,241 @@ class DashboardView(context: Context) : View(context) {
         q.addLast(value)
     }
 
-    private var logicalWidth = 1024f
-    private var logicalHeight = 1536f
     private var drawScale = 1f
-    private var drawOffsetX = 0f
-    private var drawOffsetY = 0f
-    private var landscapeLayout = false
+    private var layout: DashboardLayout? = null
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val w = MeasureSpec.getSize(widthMeasureSpec)
-        val h = MeasureSpec.getSize(heightMeasureSpec)
-        val measuredW = if (MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.UNSPECIFIED) 1024 else w
-        val measuredH = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) 1536 else h
-        setMeasuredDimension(measuredW, measuredH)
+        setMeasuredDimension(resolveSize(1024, widthMeasureSpec), resolveSize(1536, heightMeasureSpec))
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (w <= 0 || h <= 0) { layout = null; return }
+        // Recompute geometry only on resize, not for every telemetry sample.
+        val wide = w > h
+        drawScale = min(w / (if (wide) 1536f else 1024f),
+            h / (if (wide) 1024f else 1536f))
+        layout = DashboardLayout(w / drawScale, h / drawScale)
     }
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         c.drawColor(bg)
-
-        landscapeLayout = width > height
-        logicalWidth = if (landscapeLayout) 1536f else 1024f
-        logicalHeight = if (landscapeLayout) 1024f else 1536f
-
-        // Uniform scale preserves circular gauges and text proportions on phones,
-        // tablets, split-screen and both orientations.
-        drawScale = min(width / logicalWidth, height / logicalHeight)
-        drawOffsetX = (width - logicalWidth * drawScale) / 2f
-        drawOffsetY = (height - logicalHeight * drawScale) / 2f
-
+        val geometry = layout ?: return
+        // Uniform scale preserves gauge circles; all extra space belongs to panels.
         c.save()
-        c.translate(drawOffsetX, drawOffsetY)
         c.scale(drawScale, drawScale)
-        if (landscapeLayout) drawDashboardLandscape(c) else drawDashboard(c)
+        drawResponsiveHeader(c, geometry)
+        drawResponsiveConnection(c, geometry.connection)
+        drawResponsiveGauge(c, geometry.gauge)
+        drawResponsiveMetric(c, geometry.map, "MAP", format(mapVoltage, 2), "Volts", "Escala do EXE", blue, graphMap, 5f)
+        drawResponsiveMetric(c, geometry.lambda, "LAMBDA (SONDA)", if (hasData) "$lambdaMv" else "--", "mV", lambdaText(), purple, graphLambda, 5000f)
+        drawResponsiveCard(c, geometry.cards[0], "INJEÇÃO", if (injectionMs > 0) format(injectionMs, 2) else "--", "ms", "PW", green)
+        drawResponsiveCard(c, geometry.cards[1], "CORREÇÃO", if (hasData) signed(correction, 1) else "--", "%", "Acréscimo final", orange)
+        drawResponsiveCard(c, geometry.cards[2], "TEMP. MOTOR", temperatureC?.toString() ?: "--", "°C", "ECT", red)
+        drawResponsiveCard(c, geometry.cards[3], "MISTURA", mixtureValue(), mixtureUnit(), mixtureSubtitle(), yellow)
+        drawResponsiveGraph(c, geometry.graph)
+        drawResponsiveStatuses(c, geometry.statuses)
+        drawResponsiveNavigation(c, geometry)
         c.restore()
     }
 
-    private fun drawDashboard(c: Canvas) {
-        drawHeader(c)
-        drawConnectionBar(c)
-        drawRpmGauge(c)
-        drawMetricPanel(c, 585f, 205f, 425f, 220f, "MAP", format(mapVoltage, 2), "Volts", blue) {
-            drawMiniGraph(c, it, graphMap, 0f, 5f, blue)
-        }
-        drawMetricPanel(c, 585f, 438f, 425f, 220f, "LAMBDA (SONDA)", if (hasData) "$lambdaMv" else "--", "mV", purple) {
-            drawMiniGraph(c, it, graphLambda, 0f, 5000f, purple)
-        }
-        drawFourCards(c)
-        drawMainGraph(c)
-        drawStatuses(c)
-        drawBottomNav(c)
-    }
+    private fun DashboardBounds.rect() = RectF(left, top, right, bottom)
+    private fun panel(c: Canvas, b: DashboardBounds) = roundPanel(c, b.left, b.top, b.width, b.height, 16f)
 
-    /** Dedicated wide layout. It reflows the same information instead of stretching
-     * the portrait canvas, so circular gauges remain circular in landscape. */
-    private fun drawDashboardLandscape(c: Canvas) {
-        drawHeaderLandscape(c)
-        drawConnectionBarLandscape(c)
-
-        // Reuse the proven RPM drawing, moved upward into the wide layout.
+    /** Measure the actual typeface before drawing, preserving complete labels inside their bounds. */
+    private fun fittedText(c: Canvas, value: String, bounds: RectF, size: Float, color: Int,
+        align: Paint.Align = Paint.Align.LEFT, bold: Boolean = false, maxLines: Int = 1) {
+        if (bounds.width() <= 0 || bounds.height() <= 0) return
+        paint.typeface = Typeface.create(Typeface.DEFAULT, if (bold) Typeface.BOLD else Typeface.NORMAL)
+        var fitted = size * resources.configuration.fontScale.coerceIn(1f, 1.5f)
+        fun linesAt(fontSize: Float): List<String> {
+            paint.textSize = fontSize
+            if (maxLines == 1) return listOf(value)
+            val lines = mutableListOf<String>()
+            var rest = value.trim()
+            while (rest.isNotEmpty()) {
+                var count = paint.breakText(rest, true, bounds.width(), null).coerceAtLeast(1)
+                if (count < rest.length) {
+                    val wordEnd = rest.lastIndexOf(' ', count - 1)
+                    if (wordEnd > 0) count = wordEnd
+                }
+                lines += rest.take(count).trim()
+                rest = rest.drop(count).trimStart()
+            }
+            return lines.ifEmpty { listOf("") }
+        }
+        var lines = linesAt(fitted)
+        while (fitted > 1f && (lines.size > maxLines || lines.any { paint.measureText(it) > bounds.width() } ||
+                (paint.fontMetrics.descent - paint.fontMetrics.ascent) * lines.size > bounds.height())) {
+            fitted *= .94f
+            lines = linesAt(fitted)
+        }
+        paint.textSize = fitted
+        val fm = paint.fontMetrics
+        val lineHeight = fm.descent - fm.ascent
+        var baseline = bounds.centerY() - lineHeight * lines.size / 2 - fm.ascent
+        val x = when (align) { Paint.Align.CENTER -> bounds.centerX(); Paint.Align.RIGHT -> bounds.right; else -> bounds.left }
         c.save()
-        c.translate(0f, -45f)
-        drawRpmGauge(c)
+        c.clipRect(bounds)
+        lines.forEach {
+            text(c, it, x, baseline, fitted, color, align, bold)
+            baseline += lineHeight
+        }
         c.restore()
-
-        drawMetricPanel(c, 585f, 160f, 425f, 210f, "MAP", format(mapVoltage, 2), "Volts", blue) {
-            drawMiniGraph(c, it, graphMap, 0f, 5f, blue)
-        }
-        drawMetricPanel(c, 585f, 385f, 425f, 210f, "LAMBDA (SONDA)", if (hasData) "$lambdaMv" else "--", "mV", purple) {
-            drawMiniGraph(c, it, graphLambda, 0f, 5000f, purple)
-        }
-
-        compactCard(c, 1023f, 160f, 245f, 210f, "INJEÇÃO", if (injectionMs > 0) format(injectionMs, 2) else "--", "ms", "PW", green)
-        compactCard(c, 1279f, 160f, 245f, 210f, "CORREÇÃO", if (hasData) signed(correction, 1) else "--", "%", "Acréscimo final", orange)
-        compactCard(c, 1023f, 385f, 245f, 210f, "TEMP. MOTOR", temperatureC?.toString() ?: "--", "°C", "ECT", red)
-        compactCard(c, 1279f, 385f, 245f, 210f, "MISTURA", mixtureValue(), mixtureUnit(), mixtureSubtitle(), yellow)
-
-        drawMainGraphLandscape(c)
-        drawStatusesLandscape(c)
-        drawBottomNavLandscape(c)
     }
 
-    private fun drawHeaderLandscape(c: Canvas) {
-        roundPanel(c, 12f, 10f, 1512f, 75f, 16f)
-        text(c, "☰", 40f, 61f, 38f, muted)
-        text(c, "TECH", 112f, 57f, 43f, white, Paint.Align.LEFT, true)
-        text(c, "RACE", 224f, 57f, 43f, red, Paint.Align.LEFT, true)
-        text(c, "FLEX ECU", 335f, 56f, 20f, muted, Paint.Align.LEFT, true)
-        circle(c, 935f, 47f, 8f, if (demoMode) yellow else if (connected) green else red)
+    private fun drawResponsiveHeader(c: Canvas, g: DashboardLayout) {
+        val b = g.header
+        panel(c, b)
+        val middle = b.left + b.width * .43f
+        fittedText(c, "TECHRACE", RectF(b.left + 22, b.top + 6, middle - 16, b.top + b.height * .65f),
+            if (g.landscape) 46f else 54f, white, bold = true)
+        fittedText(c, "FLEX ECU  •  ${BuildConfig.VERSION_NAME}", RectF(b.left + 24, b.top + b.height * .65f, middle - 16, b.bottom - 6), 23f, red)
+        val statusColor = if (demoMode) yellow else if (connected) green else red
+        circle(c, middle + 6, b.top + b.height / 2, 8f, statusColor)
         val status = when {
-            demoMode -> "MODO DEMO"
+            demoMode -> "MODO DEMONSTRAÇÃO"
             connected && communicationOk -> "LEITURA VALIDADA"
             connected -> "$connectionLabel SEM LEITURA VÁLIDA"
             else -> "MÓDULO DESCONECTADO"
         }
-        text(c, status, 956f, 55f, 18f, if (demoMode) yellow else if (connected) green else red)
-        text(c, "TechRace V5.0", 1490f, 55f, 18f, muted, Paint.Align.RIGHT)
+        fittedText(c, status, RectF(middle + 27, b.top + 8, b.right - 20, b.bottom - 8), 27f, statusColor, maxLines = 2)
     }
 
-    private fun drawConnectionBarLandscape(c: Canvas) {
-        roundPanel(c, 12f, 95f, 1512f, 50f, 13f)
-        val connectionText = when {
+    private fun drawResponsiveConnection(c: Canvas, b: DashboardBounds) {
+        panel(c, b)
+        val label = when {
             demoMode -> "DEMO: DADOS SIMULADOS"
             connected && !communicationOk -> "LEITURA INVÁLIDA / ANTIGA"
             connected -> "$connectionLabel — CONECTADO"
             else -> "TOQUE PARA CONECTAR"
         }
-        text(c, connectionText, 45f, 128f, 18f, if (demoMode) yellow else if (connected) green else yellow)
+        fittedText(c, label, RectF(b.left + 22, b.top + 4, b.left + b.width * .76f, b.bottom - 4), 25f,
+            if (demoMode) yellow else if (connected) green else yellow)
         val now = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        text(c, now, 1490f, 128f, 18f, muted, Paint.Align.RIGHT)
+        fittedText(c, now, RectF(b.left + b.width * .79f, b.top + 4, b.right - 20, b.bottom - 4), 25f, muted, Paint.Align.RIGHT)
     }
 
-    private fun compactCard(c: Canvas, x: Float, y: Float, w: Float, h: Float, title: String, value: String, unit: String, subtitle: String, color: Int) {
-        roundPanel(c, x, y, w, h, 16f)
-        text(c, title, x + 20f, y + 35f, 18f, color)
-        text(c, value, x + w / 2f, y + 112f, 48f, white, Paint.Align.CENTER, true)
-        text(c, unit, x + w / 2f, y + 146f, 18f, color, Paint.Align.CENTER)
-        text(c, subtitle, x + w / 2f, y + h - 18f, 16f, muted, Paint.Align.CENTER)
+    private fun drawResponsiveGauge(c: Canvas, b: DashboardBounds) {
+        panel(c, b)
+        val scale = min(b.width / 560f, b.height / 453f)
+        c.save()
+        c.clipRect(b.rect())
+        c.translate(b.left + (b.width - 560 * scale) / 2, b.top + (b.height - 453 * scale) / 2)
+        c.scale(scale, scale)
+        c.translate(-12f, -205f)
+        drawRpmGauge(c, background = false)
+        c.restore()
     }
 
-    private fun drawMainGraphLandscape(c: Canvas) {
-        val x = 12f; val y = 625f; val w = 1512f; val h = 255f
-        roundPanel(c, x, y, w, h, 16f)
-        text(c, if (demoMode) "MONITOR SIMULADO" else "MONITOR / AMOSTRAS", x + 26f, y + 37f, 19f, white)
-        legend(c, 490f, y + 38f, red, "RPM")
-        legend(c, 600f, y + 38f, blue, "MAP")
-        legend(c, 703f, y + 38f, purple, "LAMBDA")
-        legend(c, 837f, y + 38f, green, "INJEÇÃO")
+    private fun drawResponsiveMetric(c: Canvas, b: DashboardBounds, title: String, value: String,
+        unit: String, subtitle: String, color: Int, history: ArrayDeque<Float>, maximum: Float) {
+        panel(c, b)
+        val pad = 20f
+        fittedText(c, title, RectF(b.left + pad, b.top + 8, b.right - pad, b.top + b.height * .22f), 29f, color)
+        // Values and sparklines have separate bounds; neither can cover the other.
+        fittedText(c, value, RectF(b.left + pad, b.top + b.height * .25f, b.left + b.width * .50f, b.top + b.height * .65f), 64f, white, bold = true)
+        fittedText(c, unit, RectF(b.left + pad, b.top + b.height * .65f, b.left + b.width * .50f, b.top + b.height * .79f), 26f, color)
+        fittedText(c, subtitle, RectF(b.left + pad, b.top + b.height * .81f, b.right - pad, b.bottom - 6), 23f, muted)
+        drawMiniGraph(c, RectF(b.left + b.width * .55f, b.top + b.height * .29f, b.right - pad, b.top + b.height * .75f), history, 0f, maximum, color)
+    }
 
-        val gr = RectF(x + 245f, y + 55f, x + w - 30f, y + h - 35f)
-        paint.style = Paint.Style.STROKE; paint.strokeWidth = 1f; paint.color = Color.rgb(35, 40, 45)
-        for (i in 0..4) { val yy = gr.top + gr.height() * i / 4f; c.drawLine(gr.left, yy, gr.right, yy, paint) }
-        for (i in 0..6) { val xx = gr.left + gr.width() * i / 6f; c.drawLine(xx, gr.top, xx, gr.bottom, paint) }
+    private fun drawResponsiveCard(c: Canvas, b: DashboardBounds, title: String, value: String,
+        unit: String, subtitle: String, color: Int) {
+        panel(c, b)
+        val left = b.left + 16
+        val right = b.right - 16
+        fittedText(c, title, RectF(left, b.top + 8, right, b.top + b.height * .23f), 28f, color, Paint.Align.CENTER, maxLines = 2)
+        fittedText(c, value, RectF(left, b.top + b.height * .26f, right, b.top + b.height * .62f), 66f, white, Paint.Align.CENTER, true)
+        fittedText(c, unit, RectF(left, b.top + b.height * .62f, right, b.top + b.height * .76f), 27f, color, Paint.Align.CENTER)
+        fittedText(c, subtitle, RectF(left, b.top + b.height * .78f, right, b.bottom - 7), 24f, muted, Paint.Align.CENTER, maxLines = 2)
+    }
+
+    private fun drawResponsiveGraph(c: Canvas, b: DashboardBounds) {
+        panel(c, b)
+        val titleHeight = min(42f, b.height * .13f)
+        fittedText(c, if (demoMode) "MONITOR SIMULADO" else "MONITOR / AMOSTRAS",
+            RectF(b.left + 22, b.top + 4, b.right - 22, b.top + titleHeight), 27f, white)
+        val colors = listOf(red, blue, purple, green)
+        val names = listOf("RPM", "MAP", "LAMBDA", "INJEÇÃO")
+        val legendTop = b.top + titleHeight
+        names.forEachIndexed { i, label ->
+            val cell = (b.width - 40) / 4
+            fittedText(c, label, RectF(b.left + 20 + i * cell, legendTop, b.left + 20 + (i + 1) * cell, legendTop + 30), 23f, colors[i], Paint.Align.CENTER)
+        }
+        val axisWidth = min(280f, b.width * .25f)
+        val gr = RectF(b.left + axisWidth, legendTop + 40, b.right - 28, b.bottom - 36)
+        paint.style = Paint.Style.STROKE; paint.strokeWidth = 1f; paint.color = border
+        for (i in 0..4) { val y = gr.top + gr.height() * i / 4; c.drawLine(gr.left, y, gr.right, y, paint) }
+        for (i in 0..6) { val x = gr.left + gr.width() * i / 6; c.drawLine(x, gr.top, x, gr.bottom, paint) }
         paint.style = Paint.Style.FILL
         drawGraphLine(c, gr, graphRpm, 0f, 8000f, red)
         drawGraphLine(c, gr, graphMap, 0f, 5f, blue)
         drawGraphLine(c, gr, graphLambda, 0f, 5000f, purple)
         drawGraphLine(c, gr, graphInjection, 0f, 10f, green)
         for (i in 0..4) {
-            val yy = gr.top + gr.height() * i / 4f + 5f
-            text(c, (8000 - i * 2000).toString(), 35f, yy, 14f, red)
-            text(c, format(5.0 - i * 1.25, 2), 90f, yy, 14f, blue)
-            text(c, (5000 - i * 1250).toString(), 145f, yy, 14f, purple)
-            text(c, format(10.0 - i * 2.5, 1), 205f, yy, 14f, green)
+            val y = gr.top + gr.height() * i / 4
+            val values = listOf((8000 - i * 2000).toString(), format(5.0 - i * 1.25, 2),
+                (5000 - i * 1250).toString(), format(10.0 - i * 2.5, 1))
+            values.forEachIndexed { j, value ->
+                val cell = (axisWidth - 14) / 4
+                fittedText(c, value, RectF(b.left + 6 + j * cell, y - 14, b.left + 6 + (j + 1) * cell, y + 14), 20f, colors[j], Paint.Align.CENTER)
+            }
         }
-        text(c, "Mais antiga", gr.left, gr.bottom + 25f, 14f, muted, Paint.Align.CENTER)
-        text(c, "${graphRpm.size} amostras", gr.centerX(), gr.bottom + 25f, 14f, muted, Paint.Align.CENTER)
-        text(c, "Última", gr.right, gr.bottom + 25f, 14f, muted, Paint.Align.CENTER)
-    }
-
-    private fun drawStatusesLandscape(c: Canvas) {
-        roundPanel(c, 12f, 890f, 1512f, 50f, 13f)
-        landscapeStatus(c, 42f, 921f, "SONDA/RPM", sondaProgrammed)
-        landscapeStatus(c, 350f, 921f, "MAP", mapProgrammed)
-        landscapeStatus(c, 610f, 921f, if (demoMode) "SIMULAÇÃO" else "COMUNICAÇÃO", communicationOk)
-        text(c, "ERROS: $errorCount", 1490f, 922f, 17f, if (errorCount == 0) muted else red, Paint.Align.RIGHT)
-    }
-
-    private fun landscapeStatus(c: Canvas, x: Float, y: Float, label: String, ok: Boolean) {
-        circle(c, x, y - 6f, 7f, if (ok) green else red)
-        text(c, "$label  ${if (demoMode) "SIMULADO" else if (ok) "OK" else "--"}", x + 18f, y, 16f, if (ok) green else muted)
-    }
-
-    private fun drawBottomNavLandscape(c: Canvas) {
-        roundPanel(c, 12f, 950f, 1512f, 64f, 13f)
-        val items = listOf(
-            Triple(Nav.MONITOR, "◴", "MONITOR"), Triple(Nav.AJUSTES, "☷", "AJUSTES"),
-            Triple(Nav.PROGRAMACAO, "▣", "PROGRAMAÇÃO"), Triple(Nav.DIAGNOSTICO, "⚠", "DIAGNÓSTICO"),
-            Triple(Nav.CONFIG, "⚙", "CONFIG.")
-        )
-        val cell = 1512f / 5f
-        items.forEachIndexed { i, (nav, icon, label) ->
-            val left = 12f + cell * i
-            val cx = left + cell / 2f
-            val sel = nav == selectedNav
-            if (sel) { paint.color = red; c.drawRect(left, 950f, left + cell, 956f, paint) }
-            text(c, icon, cx - 48f, 992f, 27f, if (sel) red else muted, Paint.Align.CENTER)
-            text(c, label, cx + 12f, 991f, 16f, if (sel) red else muted, Paint.Align.CENTER)
+        val footerTop = gr.bottom + 8
+        val cell = gr.width() / 3
+        listOf("Mais antiga", "${graphRpm.size} amostras", "Última").forEachIndexed { i, label ->
+            fittedText(c, label, RectF(gr.left + i * cell, footerTop, gr.left + (i + 1) * cell, b.bottom - 4), 21f, muted, Paint.Align.CENTER)
         }
     }
 
-    private fun drawHeader(c: Canvas) {
-        roundPanel(c, 12f, 10f, 1000f, 115f, 18f)
-        text(c, "☰", 42f, 78f, 46f, muted, Paint.Align.LEFT, false)
-        text(c, "TECH", 137f, 73f, 55f, white, Paint.Align.LEFT, true)
-        text(c, "RACE", 279f, 73f, 55f, red, Paint.Align.LEFT, true)
-        text(c, "FLEX ECU", 305f, 104f, 24f, muted, Paint.Align.LEFT, true)
-        circle(c, 642f, 70f, 9f, if (demoMode) yellow else if (connected) green else red)
-        val headerStatus = when { demoMode -> "MODO DEMO"; connected && communicationOk -> "LEITURA VALIDADA"; connected -> "$connectionLabel SEM LEITURA VÁLIDA"; else -> "MÓDULO DESCONECTADO" }
-        text(c, headerStatus, 663f, 78f, 20f, if (demoMode) yellow else if (connected) green else red)
-        text(c, "⋮", 960f, 78f, 48f, white, Paint.Align.CENTER)
+    private fun drawResponsiveStatuses(c: Canvas, b: DashboardBounds) {
+        panel(c, b)
+        val labels = listOf("SONDA / RPM", "MAP", if (demoMode) "SIMULAÇÃO" else "COMUNICAÇÃO", "ERROS")
+        val ok = listOf(sondaProgrammed, mapProgrammed, communicationOk, errorCount == 0)
+        labels.forEachIndexed { i, label ->
+            val left = b.left + i * b.width / 4 + 16
+            val right = b.left + (i + 1) * b.width / 4 - 16
+            fittedText(c, label, RectF(left, b.top + 5, right, b.top + b.height * .48f), 24f, muted, Paint.Align.CENTER)
+            val state = if (i == 3) errorCount.toString() else if (demoMode) "SIMULADO" else if (ok[i]) "OK" else "--"
+            fittedText(c, state, RectF(left, b.top + b.height * .5f, right, b.bottom - 5), 25f,
+                if (demoMode && i != 3) yellow else if (ok[i]) green else red, Paint.Align.CENTER)
+        }
     }
 
-    private fun drawConnectionBar(c: Canvas) {
-        roundPanel(c, 12f, 138f, 1000f, 55f, 14f)
-        val connectionText = when { demoMode -> "DEMO: DADOS SIMULADOS"; connected && !communicationOk -> "LEITURA INVÁLIDA / ANTIGA"; connected -> "$connectionLabel — CONECTADO"; else -> "TOQUE PARA CONECTAR" }
-        text(c, connectionText, 87f, 176f, 20f, if (demoMode) yellow else if (connected) green else yellow)
-        text(c, "TechRace V5.0", 680f, 176f, 19f, muted, Paint.Align.CENTER)
-        val now = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        text(c, now, 974f, 176f, 19f, muted, Paint.Align.RIGHT)
+    private fun drawResponsiveNavigation(c: Canvas, g: DashboardLayout) {
+        panel(c, g.navigation)
+        val labels = listOf("MONITOR", "AJUSTES", "PROGRAMAÇÃO", "DIAGNÓSTICO", "CONFIG.")
+        val icons = listOf("◴", "☷", "▣", "⚠", "⚙")
+        g.navCells.forEachIndexed { i, b ->
+            val selected = Nav.entries[i] == selectedNav
+            val color = if (selected) red else muted
+            if (selected) { paint.color = red; c.drawRect(b.left + 5, b.top, b.right - 5, b.top + 5, paint) }
+            fittedText(c, icons[i], RectF(b.left + 8, b.top + 8, b.right - 8, b.top + b.height * .55f), 35f, color, Paint.Align.CENTER)
+            fittedText(c, labels[i], RectF(b.left + 8, b.top + b.height * .58f, b.right - 8, b.bottom - 6), 25f, color, Paint.Align.CENTER)
+        }
     }
 
-    private fun drawRpmGauge(c: Canvas) {
-        roundPanel(c, 12f, 205f, 560f, 453f, 18f)
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.action != MotionEvent.ACTION_UP) return true
+        val geometry = layout ?: return true
+        val x = event.x / drawScale
+        val y = event.y / drawScale
+        if (geometry.connection.contains(x, y)) { performClick(); onUsbClick?.invoke(); return true }
+        geometry.navIndexAt(x, y)?.let { index ->
+            performClick()
+            selectedNav = Nav.entries[index]
+            invalidate()
+            onNavClick?.invoke(selectedNav)
+        }
+        return true
+    }
+
+    override fun performClick(): Boolean { super.performClick(); return true }
+
+    private fun drawRpmGauge(c: Canvas, background: Boolean = true) {
+        if (background) roundPanel(c, 12f, 205f, 560f, 453f, 18f)
         val cx = 287f
         val cy = 453f
         val radius = 205f
@@ -417,17 +448,6 @@ class DashboardView(context: Context) : View(context) {
         circle(c, 318f, 620f, 7f, Color.DKGRAY)
     }
 
-    private fun drawMetricPanel(c: Canvas, x:Float,y:Float,w:Float,h:Float,title:String,value:String,unit:String,color:Int, extra:(RectF)->Unit) {
-        roundPanel(c,x,y,w,h,18f)
-        text(c,title,x+26f,y+42f,23f,color)
-        text(c,value,x+26f,y+116f,58f,white,Paint.Align.LEFT,true)
-        text(c,unit,x+26f,y+156f,20f,color)
-        if (title.startsWith("MAP")) text(c, "Escala do EXE", x+26f, y+198f, 17f, muted)
-        if (title.startsWith("LAMBDA")) text(c, lambdaText(), x+26f, y+198f, 19f, muted)
-        val graphRect = RectF(x+155f,y+50f,x+w-20f,y+h-35f)
-        extra(graphRect)
-    }
-
     private fun drawMiniGraph(c:Canvas, r:RectF, q:ArrayDeque<Float>, minV:Float,maxV:Float,color:Int) {
         if (q.size < 2) return
         path.reset()
@@ -442,14 +462,6 @@ class DashboardView(context: Context) : View(context) {
         paint.color = color
         c.drawPath(path,paint)
         paint.style = Paint.Style.FILL
-    }
-
-    private fun drawFourCards(c: Canvas) {
-        val y=670f; val h=242f; val gap=12f; val w=(1000f-gap*3)/4f
-        card(c,12f,y,w,h,"INJEÇÃO",if(injectionMs>0) format(injectionMs,2) else "--","ms","PW",green,"▰")
-        card(c,12f+w+gap,y,w,h,"CORREÇÃO",if(hasData) signed(correction,1) else "--","%","Acréscimo final",orange,"◴")
-        card(c,12f+(w+gap)*2,y,w,h,"TEMP. MOTOR",temperatureC?.toString() ?: "--","°C","ECT",red,"♨")
-        card(c,12f+(w+gap)*3,y,w,h,"MISTURA",mixtureValue(),mixtureUnit(),mixtureSubtitle(),yellow,"⛽")
     }
 
     private fun estimatedMixturePercent(): Double? = FuelingEstimate.calibratedPercent(
@@ -476,47 +488,6 @@ class DashboardView(context: Context) : View(context) {
             else "idx $current · Δ $signed"
     }
 
-    private fun card(c:Canvas,x:Float,y:Float,w:Float,h:Float,title:String,value:String,unit:String,subtitle:String,color:Int,icon:String) {
-        roundPanel(c,x,y,w,h,17f)
-        text(c,title,x+25f,y+43f,20f,color)
-        text(c,icon,x+w-28f,y+48f,27f,color,Paint.Align.RIGHT)
-        text(c,value,x+w/2,y+139f,55f,white,Paint.Align.CENTER,true)
-        text(c,unit,x+w/2,y+177f,20f,color,Paint.Align.CENTER)
-        text(c,subtitle,x+w/2,y+221f,18f,muted,Paint.Align.CENTER)
-    }
-
-    private fun drawMainGraph(c: Canvas) {
-        val x=12f; val y=925f; val w=1000f; val h=350f
-        roundPanel(c,x,y,w,h,18f)
-        text(c,if(demoMode)"MONITOR SIMULADO" else "MONITOR / AMOSTRAS",x+28f,y+43f,21f,white)
-        legend(c,493f,y+43f,red,"RPM")
-        legend(c,603f,y+43f,blue,"MAP")
-        legend(c,706f,y+43f,purple,"LAMBDA")
-        legend(c,840f,y+43f,green,"INJEÇÃO")
-
-        val gr=RectF(x+290f,y+75f,x+w-70f,y+h-45f)
-        paint.style=Paint.Style.STROKE; paint.strokeWidth=1f; paint.color=Color.rgb(35,40,45)
-        for(i in 0..4){ val yy=gr.top+gr.height()*i/4f; c.drawLine(gr.left,yy,gr.right,yy,paint) }
-        for(i in 0..3){ val xx=gr.left+gr.width()*i/3f; c.drawLine(xx,gr.top,xx,gr.bottom,paint) }
-        paint.style=Paint.Style.FILL
-        text(c,"Mais antiga",gr.left,gr.bottom+31f,17f,muted,Paint.Align.CENTER)
-        text(c,"${graphRpm.size} amostras",gr.centerX(),gr.bottom+31f,17f,muted,Paint.Align.CENTER)
-        text(c,"Última",gr.right,gr.bottom+31f,17f,muted,Paint.Align.CENTER)
-
-        drawGraphLine(c,gr,graphRpm,0f,8000f,red)
-        drawGraphLine(c,gr,graphMap,0f,5f,blue)
-        drawGraphLine(c,gr,graphLambda,0f,5000f,purple)
-        drawGraphLine(c,gr,graphInjection,0f,10f,green)
-
-        for (i in 0..4) {
-            val yy = gr.top + gr.height() * i / 4f + 6f
-            text(c,(8000-i*2000).toString(),40f,yy,16f,red)
-            text(c,format(5.0-i*1.25,2),110f,yy,16f,blue)
-            text(c,(5000-i*1250).toString(),183f,yy,16f,purple)
-            text(c,format(10.0-i*2.5,1),250f,yy,16f,green)
-        }
-    }
-
     private fun drawGraphLine(c:Canvas,r:RectF,q:ArrayDeque<Float>,minV:Float,maxV:Float,color:Int){
         if(q.size<2)return
         path.reset()
@@ -528,69 +499,6 @@ class DashboardView(context: Context) : View(context) {
         }
         paint.style=Paint.Style.STROKE; paint.strokeWidth=3f; paint.color=color
         c.drawPath(path,paint); paint.style=Paint.Style.FILL
-    }
-
-    private fun drawStatuses(c: Canvas) {
-        roundPanel(c,12f,1288f,1000f,95f,16f)
-        statusItem(c,42f,1319f,"SONDA / RPM",sondaProgrammed)
-        statusItem(c,315f,1319f,"MAP",mapProgrammed)
-        statusItem(c,548f,1319f,if(demoMode)"SIMULAÇÃO" else "COMUNICAÇÃO",communicationOk)
-        text(c,"ERROS",878f,1327f,18f,muted,Paint.Align.CENTER)
-        text(c,errorCount.toString(),878f,1365f,20f,white,Paint.Align.CENTER)
-    }
-
-    private fun statusItem(c:Canvas,x:Float,y:Float,label:String,ok:Boolean){
-        circle(c,x,y+6f,8f,if(ok)green else red)
-        text(c,label,x+24f,y+13f,18f,muted)
-        text(c,if(demoMode)"SIMULADO" else if(ok)"OK" else "--",x+24f,y+47f,18f,if(demoMode)yellow else if(ok)green else red)
-    }
-
-    private fun drawBottomNav(c: Canvas) {
-        roundPanel(c,12f,1395f,1000f,128f,16f)
-        val items=listOf(
-            Triple(Nav.MONITOR,"◴","MONITOR"), Triple(Nav.AJUSTES,"☷","AJUSTES"),
-            Triple(Nav.PROGRAMACAO,"▣","PROGRAMAÇÃO"), Triple(Nav.DIAGNOSTICO,"⚠","DIAGNÓSTICO"),
-            Triple(Nav.CONFIG,"⚙","CONFIG.")
-        )
-        val cell=1000f/5f
-        items.forEachIndexed { i,(nav,icon,label) ->
-            val cx=12f+cell*(i+.5f)
-            val sel=nav==selectedNav
-            if(sel){ paint.color=red; c.drawRect(12f+cell*i,1395f,12f+cell*(i+1),1402f,paint) }
-            text(c,icon,cx,1455f,34f,if(sel)red else muted,Paint.Align.CENTER)
-            text(c,label,cx,1500f,17f,if(sel)red else muted,Paint.Align.CENTER)
-        }
-    }
-
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.action != MotionEvent.ACTION_UP) return true
-        if (drawScale <= 0f) return true
-        val lx = (event.x - drawOffsetX) / drawScale
-        val ly = (event.y - drawOffsetY) / drawScale
-        if (lx !in 0f..logicalWidth || ly !in 0f..logicalHeight) return true
-
-        if (landscapeLayout) {
-            if (ly in 95f..145f) { onUsbClick?.invoke(); return true }
-            if (ly in 950f..1024f) {
-                val idx = ((lx - 12f) / (1512f / 5f)).toInt().coerceIn(0, 4)
-                val nav = Nav.entries[idx]
-                selectedNav = nav
-                invalidate()
-                onNavClick?.invoke(nav)
-                return true
-            }
-        } else {
-            if (ly in 138f..193f) { onUsbClick?.invoke(); return true }
-            if (ly in 1395f..1536f) {
-                val idx = ((lx - 12f) / (1000f / 5f)).toInt().coerceIn(0, 4)
-                val nav = Nav.entries[idx]
-                selectedNav = nav
-                invalidate()
-                onNavClick?.invoke(nav)
-                return true
-            }
-        }
-        return true
     }
 
     private fun lambdaText():String {

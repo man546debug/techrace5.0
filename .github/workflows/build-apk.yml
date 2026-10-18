@@ -39,7 +39,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TechRace-V5.0-Testes
-          path: app/build/reports/tests/testDebugUnitTest/
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/dashboard-previews/
           if-no-files-found: ignore
 
       - name: Disponibilizar APK

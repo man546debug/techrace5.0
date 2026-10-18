@@ -1,7 +1,16 @@
-# TechRace Android V5.0.9 — USB OTG, Bluetooth e ajustes
+# TechRace Android V5.0.10 — USB OTG, Bluetooth e ajustes
 
 Projeto Android em Kotlin baseado nos fontes originais fornecidos do software TechRace para Windows.
-Versão 5.0.9, versionCode 60, pacote `br.com.anderson.techrace`.
+Versão 5.0.10, versionCode 61, pacote `br.com.anderson.techrace`.
+
+## Dashboard responsiva na V5.0.10
+
+- A geometria usa toda a largura e altura disponíveis, sem centralizar uma tela de proporção fixa com faixas laterais.
+- Cartões, gráfico, cabeçalho e navegação se reorganizam em retrato e paisagem; o conta-giros mantém escala uniforme e continua circular.
+- Textos são medidos com a fonte real, ajustados à largura disponível e quebrados em até duas linhas nos cartões. Valores e minigráficos ocupam áreas separadas.
+- As áreas de toque usam a mesma geometria do desenho e acompanham mudanças de resolução e rotação. A geometria é recalculada apenas no redimensionamento.
+- Testes de geometria cobrem dez resoluções; renderização Android via Robolectric Native Graphics e toques são exercitados em 800×480, 1024×600, 1280×720, 1280×800, 1920×720, 768×1024 e 1080×2160, reutilizando a mesma View.
+- As imagens de conferência são geradas em `app/build/dashboard-previews/`. A multimídia física de 9 polegadas ainda precisa ser conferida no aparelho.
 
 ## Identidade visual na V5.0.9
 
@@ -60,7 +69,7 @@ Versão 5.0.9, versionCode 60, pacote `br.com.anderson.techrace`.
 
 ## Validação em bancada/veículo
 
-Compilação local da versão 5.0.9: `testDebugUnitTest assembleDebug` concluída com sucesso; 38 testes, zero falhas/erros, nenhum teste ignorado. Assinatura do APK verificada com `apksigner`; pacote `br.com.anderson.techrace`, versionCode 60.
+Compilação local da versão 5.0.10: `testDebugUnitTest assembleDebug` concluída com sucesso; 42 testes, zero falhas/erros, nenhum teste ignorado. Assinatura do APK verificada com `apksigner`; pacote `br.com.anderson.techrace`, versionCode 61.
 
 Os testes automatizados cobrem estados do protocolo e quantização. Não houve teste com a central física; a sequência abaixo continua pendente de validação em bancada/veículo.
 
