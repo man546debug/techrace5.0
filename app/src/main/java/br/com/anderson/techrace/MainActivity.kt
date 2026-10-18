@@ -42,7 +42,7 @@ class MainActivity : Activity() {
     }
 
     private enum class ProgrammingMode(val selector: Int, val flagMask: Int, val label: String) {
-        SONDA_RPM(1, 0x02, "Sonda / RPM"),
+        SONDA_RPM(1, 0x40, "Sonda / RPM"),
         MAP(2, 0x01, "Sensor MAP")
     }
 
@@ -89,6 +89,11 @@ class MainActivity : Activity() {
     private var resumePollingAfterProgramming = false
     private var liveFailureStreak = 0
     private var mapSecondStageAcknowledged = false
+    private var programmingSession: ProgrammingSession? = null
+    private var programmingRuntimeFlags: Int? = null
+    private var mapLoadDialog: AlertDialog? = null
+    private var pendingSerialAction = false
+    private var manualConfirmDialog: AlertDialog? = null
     private val programmingStatusTask = Runnable {
         programmingMode?.let { queryProgrammingStatus(it) }
     }
@@ -248,6 +253,12 @@ class MainActivity : Activity() {
 
     private fun disconnect() {
         generation++
+        pendingSerialAction = false
+        manualConfirmDialog?.dismiss(); manualConfirmDialog = null
+        programmingSession = null
+        programmingRuntimeFlags = null
+        mapLoadDialog?.dismiss()
+        mapLoadDialog = null
         polling = false
         busy = false
         connected = false
@@ -281,7 +292,7 @@ class MainActivity : Activity() {
         val items = arrayOf(
             "Programar Sonda / RPM",
             "Programar Sensor MAP",
-            "Programar mistura manual (0 / 25 / 50 / 75 / 100%)",
+            "Programar mistura manual (barra de seleção)",
             "Encerrar operação"
         )
         AlertDialog.Builder(this).setTitle("Operações")
@@ -304,115 +315,208 @@ class MainActivity : Activity() {
             toast("Conecte o leitor antes de selecionar a mistura")
             return
         }
-        if (busy || programmingMode != null) {
-            toast("Conclua a operação atual antes de programar a mistura")
+        if (programmingMode != null || pendingSerialAction) {
+            toast("Conclua a programação atual primeiro")
             return
         }
-        val levels = intArrayOf(0, 25, 50, 75, 100)
-        val options = levels.map { "$it% de mistura" }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Selecione a mistura manual")
-            .setItems(options) { _, index ->
-                confirmManualMixture(levels[index])
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(36, 20, 36, 20)
+        }
+        val label = TextView(this)
+        val input = EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(preferences.getFloat("manual_level", 50f).toString())
+        }
+        val slider = SeekBar(this).apply { max = 1000 }
+        fun updatePreview() {
+            val level = input.text.toString().replace(',', '.').toDoubleOrNull()
+            val limit = settingsSnapshot?.raw?.get(3)?.let { (it.toInt() and 255) * 100.0 / 64.0 }
+            label.text = if (level != null && level in 0.0..100.0 && limit != null && limit in 9.375..60.0) {
+                val raw = TechRaceProtocol.manualMixtureRaw(level, limit)
+                "Correção gravável: %.4f%% (MIX %d). Limite atual: %.4f%%.".format(raw * 100.0 / 64, raw, limit)
+            } else "O limite e o valor gravável serão conferidos na central antes do envio."
+        }
+        slider.progress = ((input.text.toString().toDoubleOrNull() ?: 50.0) * 10).toInt()
+        slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) {
+                if (fromUser) input.setText((value / 10.0).toString())
             }
-            .setNegativeButton("Cancelar", null)
-            .show()
+            override fun onStartTrackingTouch(bar: SeekBar?) {}
+            override fun onStopTrackingTouch(bar: SeekBar?) {}
+        })
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                input.text.toString().replace(',', '.').toDoubleOrNull()?.let {
+                    if (it in 0.0..100.0) slider.progress = (it * 10).toInt()
+                }
+                updatePreview()
+            }
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
+        box.addView(TextView(this).apply {
+            text = "Nível manual: 0–100% do limite de correção. Não representa o teor de etanol."
+        })
+        box.addView(slider); box.addView(input); box.addView(label)
+        updatePreview()
+        val dialog = AlertDialog.Builder(this).setTitle("Mistura manual")
+            .setView(box).setPositiveButton("Conferir e aplicar", null)
+            .setNegativeButton("Cancelar", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val level = input.text.toString().replace(',', '.').toDoubleOrNull()
+                if (level == null || !level.isFinite() || level !in 0.0..100.0) {
+                    input.error = "Informe um valor entre 0 e 100"
+                } else {
+                    dialog.dismiss()
+                    programManualMixture(level)
+                }
+            }
+        }
+        dialog.show()
     }
 
-    private fun confirmManualMixture(levelPercent: Int) {
-        AlertDialog.Builder(this)
-            .setTitle("Deseja alterar a mistura para $levelPercent%?")
-            .setMessage("Ao confirmar, o comando será enviado ao módulo e o valor gravado será conferido.")
-            .setPositiveButton("Sim, enviar comando") { _, _ -> programManualMixture(levelPercent) }
-            .setNegativeButton("Cancelar", null)
-            .show()
+    /** User actions wait for the current bounded read; no repeated tap is required. */
+    private fun afterSerialIdle(action: () -> Unit) {
+        if (pendingSerialAction) { toast("Já existe um comando aguardando envio"); return }
+        pendingSerialAction = true
+        handler.removeCallbacks(pollTask)
+        handler.removeCallbacks(programmingStatusTask)
+        val token = generation
+        val started = SystemClock.elapsedRealtime()
+        handler.post(object : Runnable {
+            override fun run() {
+                if (!valid(token) || !connected || demoMode) {
+                    if (token == generation) pendingSerialAction = false
+                    return
+                }
+                if (busy) {
+                    if (SystemClock.elapsedRealtime() - started < 10_000) handler.postDelayed(this, 50)
+                    else {
+                        pendingSerialAction = false
+                        toast("A comunicação não liberou o comando. Reconecte o módulo.")
+                        if (programmingMode != null) handler.post(programmingStatusTask)
+                        else if (polling) handler.post(pollTask)
+                    }
+                    return
+                }
+                pendingSerialAction = false
+                action()
+            }
+        })
     }
 
-    private fun programManualMixture(levelPercent: Int) {
-        if (demoMode || !connected || !foreground || busy || programmingMode != null) {
+    private fun programManualMixture(levelPercent: Double) {
+        if (demoMode || !connected || !foreground || programmingMode != null || pendingSerialAction) {
             toast("Conecte o módulo em modo real e conclua outras operações primeiro")
             return
         }
         val token = generation
-        val resumePolling = polling
-        polling = false
-        dashboard.autoReading = false
-        handler.removeCallbacks(pollTask)
-        busy = true
+        afterSerialIdle {
+            val resumePolling = polling
+            polling = false
+            dashboard.autoReading = false
+            handler.removeCallbacks(pollTask)
+            busy = true
+            ioExecutor.execute {
+                var result: ManualMixtureResult? = null
+                var failure: String? = null
+                var cancelled = false
+                try {
+                    val beforeTx = TechRaceProtocol.READ_SETTINGS
+                    val beforeRx = rawExchange(beforeTx, token, attempts = 2)
+                    val before = TechRaceProtocol.extractResponse(beforeRx, 1, 25)
+                        ?: error("Leitura inicial da EEPROM inválida")
 
-        ioExecutor.execute {
-            var result: ManualMixtureResult? = null
-            var failure: String? = null
-            try {
-                val beforeTx = TechRaceProtocol.READ_SETTINGS
-                val beforeRx = rawExchange(beforeTx, token, attempts = 2)
-                val before = TechRaceProtocol.extractResponse(beforeRx, 1, 25)
-                    ?: error("Leitura inicial da EEPROM inválida")
+                    // READ_SETTINGS starts at address 0x01: offset 3 is FINAL (0x04),
+                    // and offset 2 is MIX (0x03), matching Principal.cpp/Program.cpp.
+                    val correctionLimitPercent = (before[3].toInt() and 0xFF) * 100.0 / 64.0
+                    val encoded = TechRaceProtocol.manualMixtureRaw(levelPercent, correctionLimitPercent)
+                    val confirmed = java.util.concurrent.CountDownLatch(1)
+                    var accepted = false
+                    handler.post {
+                        if (!valid(token)) { confirmed.countDown(); return@post }
+                        val dialog = AlertDialog.Builder(this)
+                            .setTitle("Confirmar mistura manual")
+                            .setMessage("Nível solicitado: $levelPercent%%.\nCorreção efetiva: %.4f%%.\nMIX: %d.\nLimite lido: %.4f%%.\nA resolução da central é de 1,5625 ponto percentual.".format(encoded * 100.0 / 64, encoded, correctionLimitPercent))
+                            .setPositiveButton("Gravar") { _, _ -> accepted = true }
+                            .setNegativeButton("Cancelar", null).create()
+                        manualConfirmDialog = dialog
+                        dialog.setOnDismissListener { manualConfirmDialog = null; confirmed.countDown() }
+                        dialog.show()
+                    }
+                    while (!confirmed.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                        if (!valid(token)) throw CancellationException()
+                    }
+                    if (!accepted) throw CancellationException("Alteração cancelada; nenhum valor foi gravado")
+                    val writeTx = TechRaceProtocol.writeEeprom(0x03, byteArrayOf(encoded.toByte()))
+                    val writeRx = rawExchange(writeTx, token, attempts = 3)
+                    check(TechRaceProtocol.isValidAck(writeRx)) { "A central não confirmou a gravação" }
 
-                // READ_SETTINGS starts at address 0x01: offset 3 is FINAL (0x04),
-                // and offset 2 is MIX (0x03), matching Principal.cpp/Program.cpp.
-                val correctionLimitPercent = (before[3].toInt() and 0xFF) * 100.0 / 64.0
-                val encoded = TechRaceProtocol.manualMixtureRaw(levelPercent, correctionLimitPercent)
-                val writeTx = TechRaceProtocol.writeEeprom(0x03, byteArrayOf(encoded.toByte()))
-                val writeRx = rawExchange(writeTx, token, attempts = 3)
-                check(TechRaceProtocol.isValidAck(writeRx)) { "A central não confirmou a gravação" }
-
-                val verifyTx = TechRaceProtocol.READ_MIXTURE
-                val verifyRx = rawExchange(verifyTx, token, attempts = 2)
-                val mixtureReply = TechRaceProtocol.extractResponse(verifyRx, 1, 1)
-                    ?: error("Resposta de verificação da EEPROM inválida")
-                val readBack = mixtureReply[0].toInt() and 0xFF
-                check(readBack == encoded) {
-                    "Valor lido de MIX ($readBack) diferente do gravado ($encoded)"
+                    val verifyTx = TechRaceProtocol.READ_MIXTURE
+                    val verifyRx = rawExchange(verifyTx, token, attempts = 2)
+                    val mixtureReply = TechRaceProtocol.extractResponse(verifyRx, 1, 1)
+                        ?: error("Resposta de verificação da EEPROM inválida")
+                    val readBack = mixtureReply[0].toInt() and 0xFF
+                    check(readBack == encoded) {
+                        "Valor lido de MIX ($readBack) diferente do gravado ($encoded)"
+                    }
+                    val verified = before.copyOf().also { it[2] = readBack.toByte() }
+                    result = ManualMixtureResult(
+                        levelPercent = levelPercent,
+                        correctionLimitPercent = correctionLimitPercent,
+                        encoded = encoded,
+                        readBack = readBack,
+                        settings = verified,
+                        writeTx = writeTx,
+                        writeRx = writeRx,
+                        verifyRx = verifyRx
+                    )
+                } catch (e: CancellationException) {
+                    cancelled = true
+                } catch (e: Exception) {
+                    failure = e.message ?: "Falha USB"
                 }
-                val verified = before.copyOf().also { it[2] = readBack.toByte() }
-                result = ManualMixtureResult(
-                    levelPercent = levelPercent,
-                    correctionLimitPercent = correctionLimitPercent,
-                    encoded = encoded,
-                    readBack = readBack,
-                    settings = verified,
-                    writeTx = writeTx,
-                    writeRx = writeRx,
-                    verifyRx = verifyRx
-                )
-            } catch (e: Exception) {
-                failure = e.message ?: "Falha USB"
-            }
 
-            val completed = result
-            val errorMessage = failure
-            handler.post {
-                if (!valid(token) || demoMode) return@post
-                busy = false
-                if (errorMessage != null || completed == null) {
-                    lastError = "Mistura manual: ${errorMessage ?: "falha de verificação"}"
-                    dashboard.markCommunicationFailure()
-                    showText("Falha ao aplicar mistura", lastError)
-                } else {
-                    val updatedSettings = ModuleSettings(completed.settings)
-                    settingsSnapshot = updatedSettings
-                    settingsTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
-                        .format(java.util.Date())
-                    lastError = "Nenhum"
-                    lastRx = completed.verifyRx
-                    moduleReport = updatedSettings.describe(rpmCalibration)
-                    val report = "Mistura ${completed.levelPercent}% aplicada e confirmada.\n\n$moduleReport"
-                    moduleReport = report
-                    toast("Mistura manual ${completed.levelPercent}% gravada e confirmada")
-                    showText("Mistura atualizada", report)
-                }
-                if (resumePolling) {
-                    polling = true
-                    dashboard.autoReading = true
-                    handler.postDelayed(pollTask, pollingIntervalMs)
+                val completed = result
+                val errorMessage = failure
+                handler.post {
+                    if (!valid(token) || demoMode) return@post
+                    busy = false
+                    if (cancelled) {
+                        toast("Alteração cancelada; nenhum valor foi gravado")
+                    } else if (errorMessage != null || completed == null) {
+                        lastError = "Mistura manual: ${errorMessage ?: "falha de verificação"}"
+                        dashboard.markCommunicationFailure()
+                        showText("Falha ao aplicar mistura", lastError)
+                    } else {
+                        preferences.edit().putFloat("manual_level", completed.levelPercent.toFloat()).apply()
+                        val updatedSettings = ModuleSettings(completed.settings)
+                        settingsSnapshot = updatedSettings
+                        settingsTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                            .format(java.util.Date())
+                        lastError = "Nenhum"
+                        lastRx = completed.verifyRx
+                        moduleReport = updatedSettings.describe(rpmCalibration)
+                        val report = "Mistura ${completed.levelPercent}% aplicada e confirmada.\n\n$moduleReport"
+                        moduleReport = report
+                        toast("Mistura manual ${completed.levelPercent}% gravada e confirmada")
+                        showText("Mistura atualizada", report)
+                    }
+                    if (resumePolling) {
+                        polling = true
+                        dashboard.autoReading = true
+                        handler.postDelayed(pollTask, pollingIntervalMs)
+                    }
                 }
             }
         }
     }
 
     private data class ManualMixtureResult(
-        val levelPercent: Int,
+        val levelPercent: Double,
         val correctionLimitPercent: Double,
         val encoded: Int,
         val readBack: Int,
@@ -434,19 +538,25 @@ class MainActivity : Activity() {
             toast("Conecte o leitor antes de iniciar")
             return
         }
-        if (busy || programmingMode != null) {
-            toast("Há uma operação em andamento")
+        if (programmingMode != null || pendingSerialAction) {
+            toast("Há uma programação em andamento")
             return
         }
         AlertDialog.Builder(this)
             .setTitle("Iniciar ${mode.label}?")
-            .setMessage("A leitura contínua será pausada durante a operação.")
+            .setMessage(if (mode == ProgrammingMode.MAP)
+                "Mantenha o motor estabilizado em marcha lenta, inicialmente sem ar-condicionado ou outras cargas. O APK avisará quando a central solicitar carga na segunda etapa."
+                else "Mantenha o motor em marcha lenta estável. A leitura contínua será pausada durante a calibração.")
             .setPositiveButton("Iniciar") { _, _ -> sendProgrammingStart(mode) }
             .setNegativeButton("Cancelar", null).show()
     }
 
     private fun sendProgrammingStart(mode: ProgrammingMode) {
-        if (busy || demoMode || !connected || !foreground) return
+        if (demoMode || !connected || !foreground || programmingMode != null || pendingSerialAction) return
+        afterSerialIdle { startProgrammingWhenIdle(mode) }
+    }
+
+    private fun startProgrammingWhenIdle(mode: ProgrammingMode) {
         resumePollingAfterProgramming = polling
         polling = false
         dashboard.autoReading = false
@@ -458,10 +568,17 @@ class MainActivity : Activity() {
             TechRaceProtocol.PROGRAM_SONDA_RPM else TechRaceProtocol.PROGRAM_MAP
         ioExecutor.execute {
             var rx = byteArrayOf()
+            var initialFlags: Int? = null
             var failure: String? = null
             try {
-                rx = rawExchange(tx, token, attempts = 3)
-                check(TechRaceProtocol.isValidAck(rx)) { "Sem ACK válido da central" }
+                val before = readProgrammingFlags(token)
+                check(before and 0x41 == 0) { "A central já está calibrando. Encerre a operação anterior antes de iniciar outra." }
+                // Selectors start calibration: never blindly resend after a lost ACK.
+                rx = rawExchange(tx, token, attempts = 1)
+                initialFlags = try { readProgrammingFlags(token) } catch (_: Exception) { null }
+                check(TechRaceProtocol.isValidAck(rx) || ((initialFlags ?: 0) and mode.flagMask) != 0) {
+                    "Início não confirmado. O comando não será reenviado automaticamente; confira o estado da central."
+                }
             } catch (e: Exception) {
                 failure = e.message ?: "Falha USB"
             }
@@ -481,21 +598,21 @@ class MainActivity : Activity() {
                     resumePollingAfterProgramming = false
                 } else {
                     programmingMode = mode
+                    programmingRuntimeFlags = initialFlags
+                    programmingSession = ProgrammingSession(mode == ProgrammingMode.MAP).also {
+                        initialFlags?.let(it::update)
+                    }
                     mapSecondStageAcknowledged = false
                     programmingStartedAt = SystemClock.elapsedRealtime()
-                    if (mode == ProgrammingMode.MAP) {
-                        dashboard.updateProgrammingFlags(map = true, sondaRpm = dashboard.sondaProgrammed)
-                    } else {
-                        dashboard.updateProgrammingFlags(map = dashboard.mapProgrammed, sondaRpm = true)
-                    }
-                    showProgrammingProgress(mode, tx, rx)
+                    showProgrammingProgress(mode)
+                    if (mode == ProgrammingMode.MAP && (initialFlags ?: 0) and 0x03 == 0x03) showMapLoadPrompt()
                     handler.postDelayed(programmingStatusTask, 700L)
                 }
             }
         }
     }
 
-    private fun showProgrammingProgress(mode: ProgrammingMode, tx: ByteArray, rx: ByteArray) {
+    private fun showProgrammingProgress(mode: ProgrammingMode) {
         programmingDialog?.dismiss()
         val status = TextView(this).apply {
             setPadding(36, 24, 36, 24)
@@ -511,79 +628,106 @@ class MainActivity : Activity() {
             .setView(ScrollView(this).apply { addView(status) })
             .setPositiveButton("Encerrar", null)
             .setNeutralButton("Atualizar", null)
-            .setNegativeButton(if (mode == ProgrammingMode.MAP) "Etapa 2" else "OK", null)
+            .setNegativeButton("Instruções", null)
             .setCancelable(false)
             .create()
         programmingDialog = dialog
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                if (busy) toast("Aguarde a consulta atual terminar") else sendProgrammingStop(closeDialog = true)
+                sendProgrammingStop(closeDialog = true)
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                if (busy) toast("Consulta em andamento") else programmingMode?.let { queryProgrammingStatus(it) }
+                afterSerialIdle {
+                    programmingStartedAt = SystemClock.elapsedRealtime()
+                    programmingMode?.let { queryProgrammingStatus(it) }
+                }
             }
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
-                if (mode == ProgrammingMode.MAP) markMapSecondStageReady()
-                else toast("Operação em andamento")
+                showText("Instruções", if (mode == ProgrammingMode.MAP)
+                    "Etapa 1: marcha lenta estável sem carga.\nEtapa 2: aguarde o aviso da central para ligar o ar-condicionado ou aplicar a carga indicada.\nA central avança automaticamente; não há um segundo comando de início."
+                    else "Mantenha o motor estabilizado em marcha lenta e aguarde a confirmação da central.")
             }
         }
         dialog.show()
     }
 
-    private fun markMapSecondStageReady() {
-        if (programmingMode != ProgrammingMode.MAP) return
-        mapSecondStageAcknowledged = true
-        val elapsed = (SystemClock.elapsedRealtime() - programmingStartedAt) / 1000
-        programmingStatusView?.text = "Sensor MAP: etapa 2 iniciada (${elapsed}s). Aguardando módulo."
-        if (!busy) queryProgrammingStatus(ProgrammingMode.MAP)
+    private fun showMapLoadPrompt() {
+        if (mapSecondStageAcknowledged || mapLoadDialog != null) return
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("MAP — etapa 2: ligar carga")
+            .setMessage("A central solicitou a segunda etapa. Ligue o ar-condicionado. Em veículo automático, se aplicável ao procedimento, selecione D com o veículo imobilizado e o freio acionado. Mantenha a marcha lenta estável.\n\nA central detecta a carga e avança automaticamente.")
+            .setPositiveButton("Carga ligada") { _, _ -> mapSecondStageAcknowledged = true }
+            .setCancelable(false).create()
+        mapLoadDialog = dialog
+        dialog.show()
+    }
+
+    private fun readProgrammingFlags(token: Int): Int {
+        val reply = rawExchange(TechRaceProtocol.READ_PROGRAMMING_STATUS, token, attempts = 2)
+        val bytes = TechRaceProtocol.extractResponse(reply, 0, 2)
+            ?: error("Estado RAM 0x63 inválido")
+        return bytes[0].toInt() and 255
     }
 
     private fun queryProgrammingStatus(mode: ProgrammingMode) {
-        if (programmingMode != mode || demoMode || !connected || !foreground) return
+        if (programmingMode != mode || demoMode || !connected || !foreground || pendingSerialAction) return
+        handler.removeCallbacks(programmingStatusTask)
         if (busy) {
-            handler.postDelayed(programmingStatusTask, 500L)
+            handler.postDelayed(programmingStatusTask, 300L)
             return
         }
         busy = true
         val token = generation
-        val tx = TechRaceProtocol.READ_SETTINGS
         ioExecutor.execute {
-            var rx = byteArrayOf()
-            var payload: ByteArray? = null
+            var flags: Int? = null
             var failure: String? = null
-            try {
-                rx = rawExchange(tx, token, attempts = 2)
-                payload = TechRaceProtocol.extractResponse(rx, 1, 25)
-                check(payload != null) { "Resposta EEPROM inválida" }
-            } catch (e: Exception) {
-                failure = e.message ?: "Falha USB"
-            }
-            val data = payload
+            try { flags = readProgrammingFlags(token) }
+            catch (e: Exception) { failure = e.message ?: "Falha de comunicação" }
+            val data = flags
             val err = failure
             handler.post {
                 if (!valid(token) || programmingMode != mode) return@post
                 busy = false
-                if (err != null || data == null) {
-                    programmingStatusView?.text = "${mode.label}: falha ao atualizar (${err ?: "resposta inválida"})."
-                    if ((SystemClock.elapsedRealtime() - programmingStartedAt) < 90_000) {
-                        handler.removeCallbacks(programmingStatusTask)
-                        handler.postDelayed(programmingStatusTask, 2000L)
-                    }
-                    return@post
-                }
-                val settings = ModuleSettings(data)
-                settingsSnapshot = settings
-                settingsTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-                dashboard.updateProgrammingFlags(settings.mapFlag, settings.rpmFlag)
-                val flagActive = (data[0].toInt() and 0xFF and mode.flagMask) != 0
                 val elapsed = (SystemClock.elapsedRealtime() - programmingStartedAt) / 1000
-                programmingStatusView?.text = "${mode.label}: ${if (flagActive) "concluído" else "em andamento"} • ${elapsed}s"
-                if (!flagActive && elapsed < 90) {
-                    handler.removeCallbacks(programmingStatusTask)
-                    handler.postDelayed(programmingStatusTask, 1500L)
+                if (data == null) {
+                    programmingStatusView?.text = "Falha ao consultar a central: $err.\nA conclusão ainda não foi confirmada."
+                } else {
+                    programmingRuntimeFlags = data
+                    val stage = programmingSession?.update(data)
+                    programmingStatusView?.text = when (stage) {
+                        ProgrammingSession.Stage.MAP_LOAD -> "MAP — etapa 2: ligue a carga e mantenha a lenta estável. • ${elapsed}s"
+                        ProgrammingSession.Stage.RUNNING -> "${mode.label}: ${if (mode == ProgrammingMode.MAP) "etapa 1, sem carga" else "calibrando"} • ${elapsed}s"
+                        ProgrammingSession.Stage.COMPLETE -> "${mode.label}: programação concluída e confirmada pela central."
+                        else -> "Aguardando confirmação de início da central. • ${elapsed}s"
+                    }
+                    if (stage == ProgrammingSession.Stage.MAP_LOAD) showMapLoadPrompt()
+                    if (stage == ProgrammingSession.Stage.COMPLETE) {
+                        finishProgramming(mode)
+                        return@post
+                    }
+                }
+                if (elapsed < 90) {
+                    handler.postDelayed(programmingStatusTask, if (data == null) 1500L else 500L)
+                } else {
+                    programmingStatusView?.append("\nTempo de acompanhamento excedido. Use Atualizar ou Encerrar. Não há confirmação de conclusão.")
                 }
             }
         }
+    }
+
+    private fun finishProgramming(mode: ProgrammingMode) {
+        handler.removeCallbacks(programmingStatusTask)
+        programmingMode = null
+        programmingSession = null
+        mapLoadDialog?.dismiss(); mapLoadDialog = null
+        programmingDialog?.dismiss(); programmingDialog = null
+        programmingStatusView = null
+        polling = resumePollingAfterProgramming
+        resumePollingAfterProgramming = false
+        dashboard.autoReading = polling
+        showText("Programação concluída", "${mode.label} programado com sucesso. A central confirmou o encerramento da calibração.")
+        // Refresh persisted flags only after runtime calibration has finished.
+        queryModule(1, showResult = false)
     }
 
     private fun confirmProgrammingStop() {
@@ -595,10 +739,6 @@ class MainActivity : Activity() {
             toast("Conecte o módulo por USB")
             return
         }
-        if (busy) {
-            toast("Há uma operação em andamento")
-            return
-        }
         AlertDialog.Builder(this)
             .setTitle("Encerrar modo de programação?")
             .setMessage("Deseja encerrar esta operação?")
@@ -607,8 +747,14 @@ class MainActivity : Activity() {
     }
 
     private fun sendProgrammingStop(closeDialog: Boolean) {
-        if (busy || demoMode || !connected || !foreground) return
+        if (demoMode || !connected || !foreground) return
+        afterSerialIdle { stopProgrammingWhenIdle(closeDialog) }
+    }
+
+    private fun stopProgrammingWhenIdle(closeDialog: Boolean) {
         handler.removeCallbacks(programmingStatusTask)
+        val resumeLive = polling
+        polling = false
         val token = generation
         val tx = TechRaceProtocol.PROGRAM_STOP
         busy = true
@@ -617,7 +763,7 @@ class MainActivity : Activity() {
             var failure: String? = null
             try {
                 rx = rawExchange(tx, token, attempts = 3)
-                check(TechRaceProtocol.isValidAck(rx)) { "Sem ACK válido da central" }
+                check(readProgrammingFlags(token) and 0x41 == 0) { "A central ainda informa calibração ativa" }
             } catch (e: Exception) {
                 failure = e.message ?: "Falha USB"
             }
@@ -628,9 +774,13 @@ class MainActivity : Activity() {
                 if (err != null) {
                     programmingStatusView?.text = "Falha ao enviar encerramento: $err\n\nA programação não foi marcada como encerrada no APK."
                     toast("Falha ao encerrar programação")
+                    if (programmingMode != null) handler.postDelayed(programmingStatusTask, 1500)
+                    else if (resumeLive) { polling = true; handler.post(pollTask) }
                     return@post
                 }
                 programmingMode = null
+                programmingSession = null
+                mapLoadDialog?.dismiss(); mapLoadDialog = null
                 programmingStatusView?.text = "Modo de programação encerrado.\n\nTX: ${TechRaceProtocol.toHex(tx)}\nRX: ${TechRaceProtocol.toHex(rx)}"
                 if (closeDialog) {
                     programmingDialog?.dismiss()
@@ -638,7 +788,7 @@ class MainActivity : Activity() {
                     programmingStatusView = null
                 }
                 toast("Modo de programação encerrado")
-                if (resumePollingAfterProgramming) {
+                if (resumePollingAfterProgramming || resumeLive) {
                     polling = true
                     dashboard.autoReading = true
                     handler.postDelayed(pollTask, pollingIntervalMs)
@@ -669,12 +819,24 @@ class MainActivity : Activity() {
                 if (n > 0) {
                     out.write(buffer, 0, n)
                     if (out.size() > 128) break
-                } else if (out.size() > 0) {
+                    val command = tx[1].toInt() and 255
+                    val count = tx[4].toInt() and 255
+                    val snapshot = out.toByteArray()
+                    if (command in 0..3) {
+                        if (TechRaceProtocol.extractResponse(snapshot, command, count) != null) return snapshot
+                        if (snapshot.size > count + 3) break
+                    }
+                } else if (out.size() > 0 && (tx[1].toInt() and 255) !in 0..3 &&
+                    TechRaceProtocol.isValidAck(out.toByteArray())) {
                     break
                 }
             }
             last = out.toByteArray()
-            if (TechRaceProtocol.isValidAck(last)) return last
+            val command = tx[1].toInt() and 255
+            val validReply = if (command in 0..3)
+                TechRaceProtocol.extractResponse(last, command, tx[4].toInt() and 255) != null
+                else TechRaceProtocol.isValidAck(last)
+            if (validReply) return last
         }
         return last
     }
@@ -708,7 +870,7 @@ class MainActivity : Activity() {
     }
 
     private fun showAdjustments() {
-        if (busy) { toast("Aguarde a operação atual terminar"); return }
+        if (busy || pendingSerialAction || programmingMode != null) { toast("Conclua a operação atual primeiro"); return }
         val draft = loadLocalSettingsDraft()
         if (demoMode || !connected || !foreground) {
             val resume = polling
@@ -768,7 +930,7 @@ class MainActivity : Activity() {
             toast("Conecte a central em modo real para ler a programação")
             return
         }
-        if (busy) { toast("Aguarde a operação atual terminar"); return }
+        if (busy || pendingSerialAction || programmingMode != null) { toast("Conclua a operação atual primeiro"); return }
         val token = generation
         busy = true
         polling = false
@@ -1124,8 +1286,10 @@ class MainActivity : Activity() {
             if (demoMode) "Desativar modo demonstração" else "Ativar modo demonstração",
             if (connected) "Reconectar" else "Conectar",
             if (polling) "Parar leitura contínua" else "Iniciar leitura contínua",
-            "Ler uma vez", "Desconectar", "Sobre", "Consultar módulo / EEPROM", "Exportar telemetria CSV", "Limpar histórico CSV",
-            "Registrar abastecimento"
+            "Ler uma vez", "Desconectar", "Sobre",
+            "Consultar versão do firmware", "Ler configurações EEPROM",
+            "Ver última configuração lida", "RAM adicional (experimental, valores brutos)",
+            "Fator RPM e intervalo de leitura", "Exportar telemetria CSV", "Limpar histórico CSV"
         )
         AlertDialog.Builder(this).setTitle("Configurações").setItems(items) { _, index ->
             when (index) {
@@ -1150,10 +1314,14 @@ class MainActivity : Activity() {
                 6 -> AlertDialog.Builder(this).setTitle("TechRace V5.0")
                     .setMessage("Monitoramento, ajustes e exportação de dados.")
                     .setPositiveButton("OK", null).show()
-                7 -> showModuleMenu()
-                8 -> exportDocument("techrace-telemetria.csv", "text/csv", csvContent())
-                9 -> { csvRows.clear(); toast("Histórico CSV limpo") }
-                10 -> showFuelingDialog()
+                7 -> queryModule(0)
+                8 -> queryModule(1)
+                9 -> showText("EEPROM — $settingsTime", settingsSnapshot?.describe(rpmCalibration)
+                    ?: "Nenhuma configuração foi lida nesta conexão.")
+                10 -> showRamQueryConfirmation()
+                11 -> showLocalAdjustments()
+                12 -> exportDocument("techrace-telemetria.csv", "text/csv", csvContent())
+                13 -> { csvRows.clear(); toast("Histórico CSV limpo") }
             }
         }.show()
     }
@@ -1581,7 +1749,7 @@ class MainActivity : Activity() {
     }
 
     private fun pollOnce() {
-        if (busy || demoMode || !connected || !foreground) return
+        if (busy || pendingSerialAction || programmingMode != null || demoMode || !connected || !foreground) return
         handler.removeCallbacks(pollTask)
         busy = true
         val token = generation
@@ -1606,8 +1774,8 @@ class MainActivity : Activity() {
                     val n = p.read(buffer, SERIAL_READ_MS)
                     if (n > 0) {
                         response.append(buffer.copyOf(n))
-                        if (response.snapshot().size > 13) break
-                    } else if (response.snapshot().isNotEmpty()) break // inter-byte idle gap
+                        if (response.snapshot().size >= 13) break
+                    }
                 }
                 val rx = response.snapshot()
                 failure = when {
@@ -1655,8 +1823,9 @@ class MainActivity : Activity() {
         val body = """
             Modo: ${if (demoMode) "DEMO" else "REAL"}
             Conexão: ${if (connectionType == "bluetooth") "Bluetooth SPP" else "USB OTG"}
-            APK: 5.0.1
+            APK: ${BuildConfig.VERSION_NAME}
             Programação ativa: ${programmingMode?.label ?: "não"}
+            Último estado RAM 0x63: ${programmingRuntimeFlags?.let { "0x%02X".format(it) } ?: "não consultado"}
             Firmware: $firmwareVersion
             Porta: ${if (connected) "ABERTA" else "FECHADA"}
             Serial: 19200 8N1
@@ -1695,30 +1864,29 @@ class MainActivity : Activity() {
     }
 
     private fun showModuleMenu() {
-        val items = arrayOf("Ajustar ECU: partida a frio, temperaturas, aceleração, RPM e Lambda",
-            "Consultar versão do firmware", "Ler configurações EEPROM", "Ver última configuração lida",
-            "RAM adicional (experimental, valores brutos)", "Fator RPM e intervalo de leitura", "Exportar telemetria CSV")
-        AlertDialog.Builder(this).setTitle("Ajustes").setItems(items) { _, i ->
-            when (i) {
+        val items = arrayOf(
+            "Ajustar ECU: partida a frio, temperaturas, aceleração, RPM e Lambda",
+            "Registrar abastecimento"
+        )
+        AlertDialog.Builder(this).setTitle("Ajustes").setItems(items) { _, index ->
+            when (index) {
                 0 -> showAdjustments()
-                1 -> queryModule(0)
-                2 -> queryModule(1)
-                3 -> showText("EEPROM — $settingsTime", settingsSnapshot?.describe(rpmCalibration)
-                    ?: "Nenhuma configuração foi lida nesta conexão.")
-                4 -> AlertDialog.Builder(this).setTitle("Mapa RAM a validar")
-                    .setMessage("Consulta 0x4D..0x56 segundo a planilha FLEX V10.0. A compatibilidade com firmware 2.0 não foi confirmada. Os dados serão mostrados como valores brutos.")
-                    .setPositiveButton("Consultar") { _, _ -> queryModule(2) }
-                    .setNegativeButton("Cancelar", null).show()
-                5 -> showLocalAdjustments()
-                6 -> exportDocument("techrace-telemetria.csv", "text/csv", csvContent())
+                1 -> showFuelingDialog()
             }
         }.show()
+    }
+
+    private fun showRamQueryConfirmation() {
+        AlertDialog.Builder(this).setTitle("Mapa RAM a validar")
+            .setMessage("Consulta 0x4D..0x56 segundo a planilha FLEX V10.0. A compatibilidade com firmware 2.0 não foi confirmada. Os dados serão mostrados como valores brutos.")
+            .setPositiveButton("Consultar") { _, _ -> queryModule(2) }
+            .setNegativeButton("Cancelar", null).show()
     }
 
     /** All additional requests use the selected serial transport on the single I/O executor. */
     private fun queryModule(kind: Int, showResult: Boolean = true) {
         if (demoMode || !connected || !foreground) { toast("Conecte o leitor em modo real"); return }
-        if (busy) { toast("Leitura em andamento; tente novamente"); return }
+        if (busy || pendingSerialAction || programmingMode != null) { toast("Conclua a operação atual primeiro"); return }
         val tx = when (kind) {
             0 -> TechRaceProtocol.READ_VERSION
             1 -> TechRaceProtocol.READ_SETTINGS
@@ -1749,8 +1917,8 @@ class MainActivity : Activity() {
                     val n = p.read(buf, SERIAL_READ_MS)
                     if (n > 0) {
                         received.append(buf.copyOf(n))
-                        if (received.snapshot().size > expected + 3) break
-                    } else if (received.snapshot().isNotEmpty()) break
+                        if (received.snapshot().size >= expected + 3) break
+                    }
                 }
                 payload = TechRaceProtocol.extractResponse(received.snapshot(), command, expected)
                 check(payload != null) { "Resposta inválida: tamanho, função ou CRC; esperado ${expected + 3} bytes" }

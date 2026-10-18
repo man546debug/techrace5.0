@@ -19,6 +19,13 @@
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:resizeableActivity="true"
+            android:exported="false" />
+
+        <activity
+            android:name=".SplashActivity"
+            android:theme="@style/TechRaceLaunchTheme"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:resizeableActivity="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

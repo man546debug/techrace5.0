@@ -149,9 +149,29 @@ class ProtocolTest {
         assertEquals(0, TechRaceProtocol.encodePercent(0.0))
     }
 
+    @Test fun fractionalManualMixtureUsesRealEepromResolution() {
+        assertEquals(12, TechRaceProtocol.manualMixtureRaw(31.5, 60.0))
+        assertEquals(12, TechRaceProtocol.manualMixtureRaw(31.6, 60.0))
+        assertEquals(13, TechRaceProtocol.manualMixtureRaw(34.0, 60.0))
+        for (limit in listOf(9.375, 10.0, 39.0625, 60.0)) {
+            var previous = 0
+            for (step in 0..1000) {
+                val raw = TechRaceProtocol.manualMixtureRaw(step / 10.0, limit)
+                assertTrue(raw >= previous)
+                assertTrue(raw in 1..TechRaceProtocol.manualMixtureRaw(100, limit))
+                previous = raw
+            }
+        }
+    }
+
     @Test(expected = IllegalArgumentException::class)
-    fun manualMixtureRejectsUnsupportedLevel() {
-        TechRaceProtocol.manualMixtureRaw(30, 60.0)
+    fun manualMixtureRejectsNaN() {
+        TechRaceProtocol.manualMixtureRaw(Double.NaN, 60.0)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun manualMixtureRejectsOutOfRangeLevel() {
+        TechRaceProtocol.manualMixtureRaw(101, 60.0)
     }
 
     @Test(expected = IllegalArgumentException::class)

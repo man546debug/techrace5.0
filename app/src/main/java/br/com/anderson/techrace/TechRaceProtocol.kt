@@ -12,6 +12,7 @@ object TechRaceProtocol {
     val READ_VERSION: ByteArray get() = readRequest(3, 1, 1)
     val READ_SETTINGS: ByteArray get() = readRequest(1, 1, 25)
     val READ_MIXTURE: ByteArray get() = readRequest(1, 3, 1)
+    val READ_PROGRAMMING_STATUS: ByteArray get() = readRam(0x63, 2)
     val READ_EXTENDED: ByteArray get() = readRam(0x4D, 10)
 
     /** Program.cpp selectors sent with command 13, address 1, one data byte. */
@@ -29,28 +30,22 @@ object TechRaceProtocol {
         return round(value * 64.0 / 100.0).toInt().coerceIn(0, 255)
     }
 
-    /**
-     * Encodes the five manual-mixture choices exactly like Program.cpp.
-     * The selected level is relative to the EEPROM correction limit (FINAL),
-     * not a direct measurement of ethanol concentration.
-     */
-    fun manualMixtureRaw(levelPercent: Int, correctionLimitPercent: Double): Int {
-        require(levelPercent == 0 || levelPercent == 25 || levelPercent == 50 ||
-            levelPercent == 75 || levelPercent == 100) {
-            "Selecione 0%, 25%, 50%, 75% ou 100%"
+    /** Level is relative to FINAL, not ethanol content. EEPROM resolution is 1/64. */
+    fun manualMixtureRaw(levelPercent: Int, correctionLimitPercent: Double): Int =
+        manualMixtureRaw(levelPercent.toDouble(), correctionLimitPercent)
+
+    fun manualMixtureRaw(levelPercent: Double, correctionLimitPercent: Double): Int {
+        require(levelPercent.isFinite() && levelPercent in 0.0..100.0) {
+            "Selecione um nível entre 0 e 100%"
         }
-        require(correctionLimitPercent.isFinite() && correctionLimitPercent in 10.0..60.0) {
+        // A configured 10% limit is stored as raw 6, i.e. 9.375% after quantization.
+        require(correctionLimitPercent.isFinite() && correctionLimitPercent in 9.375..60.0) {
             "Limite de correção fora da faixa do programa original (10% a 60%)"
         }
-        val effectivePercent = when (levelPercent) {
-            0 -> 1.0
-            25 -> correctionLimitPercent * 0.25
-            50 -> correctionLimitPercent * 0.50
-            75 -> correctionLimitPercent * 0.75
-            else -> correctionLimitPercent - 1.0
-        }
-        // printf("%.0f") in Program.cpp uses the default nearest-even rounding.
-        return round(effectivePercent * 64.0 / 100.0).toInt().coerceIn(0, 255)
+        // Preserve Program.cpp endpoints (1% and FINAL - 1%) and legacy presets.
+        val effectivePercent = (correctionLimitPercent * levelPercent / 100.0)
+            .coerceIn(1.0, correctionLimitPercent - 1.0)
+        return round(effectivePercent * 64.0 / 100.0).toInt()
     }
 
     fun programSelector(selector: Int): ByteArray {

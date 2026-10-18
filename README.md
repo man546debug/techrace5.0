@@ -1,7 +1,19 @@
-# TechRace Android V5.0.1 — USB OTG, Bluetooth e ajustes
+# TechRace Android V5.0.9 — USB OTG, Bluetooth e ajustes
 
 Projeto Android em Kotlin baseado nos fontes originais fornecidos do software TechRace para Windows.
-Versão 5.0.1, versionCode 52, pacote `br.com.anderson.techrace`.
+Versão 5.0.9, versionCode 60, pacote `br.com.anderson.techrace`.
+
+## Identidade visual na V5.0.9
+
+- Logo enviado pelo usuário no ícone do aplicativo, com versões para Android 7 e ícones adaptativos para Android 8 ou superior.
+- Tela de entrada branca com logo completo, proporções preservadas e transição automática ao painel após 1,4 segundo.
+- A tela de entrada cancela a navegação se o aplicativo passar ao segundo plano.
+
+## Organização dos menus na V5.0.8
+
+- **Ajustes:** Ajustar ECU e Registrar abastecimento.
+- **Configurações:** conexão, demonstração, leitura, firmware, leitura e consulta de EEPROM, RAM experimental, fator RPM/intervalo e exportação/limpeza de CSV.
+- As telas de programação e o painel foram preservados.
 
 ## Recursos da V5.0
 
@@ -18,7 +30,7 @@ Versão 5.0.1, versionCode 52, pacote `br.com.anderson.techrace`.
 - Nova aba **PROGRAMAÇÃO** com telas para:
   - **Programar Sonda / RPM**;
   - **Programar Sensor MAP**;
-  - **Programar mistura manual** nos níveis de 0%, 25%, 50%, 75% e 100%;
+  - **Programar mistura manual** por barra de 0 a 100%, com digitação decimal;
   - **Encerrar / resetar modo de programação**;
 - acompanhar o estado das operações.
 - Programação implementada diretamente a partir de `Program.cpp`:
@@ -33,15 +45,32 @@ Versão 5.0.1, versionCode 52, pacote `br.com.anderson.techrace`.
   - MAP: `F3 0D 00 01 01 02 C0`;
   - encerrar/resetar: `F3 0D 00 01 01 00 CE`.
 - Durante a programação, a leitura contínua é pausada para evitar concorrência na porta serial.
-- O APK consulta a EEPROM e mostra as flags associadas pelo `Principal.cpp`:
-  - bit `0x02` = Sonda/RPM;
-  - bit `0x01` = MAP.
-- O status deixa explícito que uma flag já ativa pode representar uma calibração anterior.
-- Botão **Finalizar / encerrar** envia o seletor `0` antes de voltar à telemetria.
-- Modo demonstração permite visualizar as telas, mas nunca transmite comandos.
+- A calibração é acompanhada na **RAM 0x63, 2 bytes**, conforme `FlexProgram.cpp`:
+  - Sonda/RPM: bit `0x40` ativo enquanto calibra;
+  - MAP: bit `0x01` ativo enquanto calibra;
+  - MAP etapa 2: com MAP ativo, bit `0x02` pede ligar carga;
+  - sucesso exige observar o estado ativo e depois inativo; ausência de resposta ou limite de 90 s não é sucesso.
+- O aviso de ligar ar-condicionado/carga surge automaticamente na segunda etapa. O botão “Carga ligada” apenas reconhece a orientação; não envia outro comando de início.
+- A EEPROM continua sendo usada para ajustes persistidos, sem confundir suas flags com estados da RAM.
+- Ações de programação aguardam a leitura serial em andamento. A telemetria fica pausada durante a calibração e retorna ao terminar.
+- O seletor de início não é repetido cegamente quando o ACK se perde: o APK consulta a RAM antes de decidir se o início foi reconhecido. Se não for confirmado, informa a falha para permitir nova tentativa explícita.
+- Leituras fragmentadas aguardam o quadro completo até o timeout; função, tamanho e CRC são verificados nas leituras de estado.
+- Mistura: a barra usa passos visuais de 0,1 no nível relativo, mas **a central grava um byte inteiro**, com resolução de **1,5625 ponto percentual de correção**. Valores vizinhos podem gerar o mesmo byte. A confirmação usa o limite recém-lido da central e mostra o byte MIX e a correção efetiva; só então grava. Após gravar, relê MIX para conferir.
+- Modo demonstração nunca transmite comandos.
 
-## Limite conhecido
-`Program.cpp` abre `FlexProgramForm` depois de iniciar Sonda/RPM ou MAP, mas o arquivo `FlexProgram.cpp` não foi fornecido. O APK preserva os comandos de início e encerramento presentes nos arquivos recebidos.
+## Validação em bancada/veículo
+
+Compilação local da versão 5.0.9: `testDebugUnitTest assembleDebug` concluída com sucesso; 38 testes, zero falhas/erros, nenhum teste ignorado. Assinatura do APK verificada com `apksigner`; pacote `br.com.anderson.techrace`, versionCode 60.
+
+Os testes automatizados cobrem estados do protocolo e quantização. Não houve teste com a central física; a sequência abaixo continua pendente de validação em bancada/veículo.
+
+1. Com telemetria ativa, solicite Sonda/RPM uma vez; confira espera pela leitura atual, estado RAM `0x40` ativo e posterior encerramento.
+2. Inicie MAP com motor em lenta estável e sem carga; confira estado `0x01`.
+3. Quando o estado indicar `0x03`, confira o aviso automático para ligar carga. Ligue o ar-condicionado e mantenha a lenta estável.
+4. Confira que sucesso só aparece após o bit ativo de MAP limpar. O encerramento manual também deve aguardar a consulta atual e verificar o estado da RAM.
+5. Se houver timeout, confira que não aparece sucesso. Refaça a consulta ou encerre explicitamente.
+6. Teste mistura decimal: confira correção efetiva na confirmação e releitura de MIX. Níveis relativos não são teor de etanol nem percentual direto de combustível adicional.
+7. Desconecte/reconecte e teste USB OTG e Bluetooth SPP separadamente. Não interrompa alimentação durante gravação.
 
 ## Compilar no GitHub
 1. Extraia este ZIP na raiz do repositório.
@@ -60,14 +89,3 @@ Estrutura transmitida conforme `Porta_serial.cpp`:
 CRC-8: polinômio `0x07`, valor inicial `0x00`, MSB first. O software original aceita uma resposta quando há bytes recebidos e o CRC residual do quadro recebido é zero. O APK reproduz essa regra nos comandos e mantém validação estrita de função/tamanho nas leituras conhecidas.
 
 A EEPROM é lida com função `1`, endereço `1`, 25 bytes. Os ajustes editáveis gravam essa área com função `4`, preservam os campos não editados e conferem a gravação por releitura. A mistura manual grava somente o byte `MIX` no endereço `0x03`.
-
-## Primeiro teste no carro/módulo
-1. Teste primeiro o modo demonstração para conferir as novas telas.
-2. Em modo real, conecte o módulo e confirme que a versão do firmware é lida.
-3. Leia a EEPROM antes de programar e anote as flags MAP/Sonda-RPM.
-4. Entre em **PROGRAMAÇÃO > Programar Sonda / RPM** e compare TX/RX com o software de PC.
-5. Finalize usando **Finalizar / encerrar**.
-6. Repita para **Sensor MAP**.
-7. Se alguma etapa falhar, abra **DIAGNÓSTICO** e registre TX, RX e mensagem de erro.
-
-Não desligue a alimentação nem remova o USB durante uma operação de programação. Como `FlexProgram.cpp` ainda não está disponível, valide a sequência de condições do motor comparando com o software original de PC antes de considerar a rotina totalmente reproduzida.
