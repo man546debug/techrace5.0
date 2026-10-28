@@ -36,13 +36,31 @@ jobs:
           set -o pipefail
           gradle --no-daemon testDebugUnitTest assembleDebug 2>&1 | tee build-output.log
 
-      - name: Resumo da compilação
-        if: always()
+      - name: Diagnóstico sem conteúdo do log
+        if: failure()
         run: |
-          echo '### Saída da compilação' >> "$GITHUB_STEP_SUMMARY"
-          echo '```text' >> "$GITHUB_STEP_SUMMARY"
-          tail -n 150 build-output.log >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PYDIAG'
+          from pathlib import Path
+          import re
+          text = Path('build-output.log').read_text(errors='replace')
+          categories = {
+              'DEPENDENCY_RESOLUTION': 'Could not resolve',
+              'KOTLIN_COMPILATION': 'Compilation error',
+              'UNIT_TEST_FAILURE': 'There were failing tests',
+              'ANDROID_SDK': 'SDK location not found',
+              'JITPACK_HTTP_403': 'Received status code 403',
+              'JAVA_TRUST': 'PKIX path building failed',
+          }
+          for label, marker in categories.items():
+              if marker in text:
+                  print('::error title=Build category::' + label)
+          # Output only filenames already published in this commit and numeric line locations.
+          for filename in ['MainActivity.kt', 'ProgrammingMonitor.kt', 'MapCalibrationDisplay.kt',
+                           'ProgrammingMonitorTest.kt', 'MapCalibrationDisplayTest.kt']:
+              lines = re.findall(re.escape(filename) + r':(\d+):', text)
+              for number in sorted(set(lines)):
+                  print('::error title=Compiler location::' + filename + ':' + number)
+          PYDIAG
 
       - name: Disponibilizar testes
         if: always()
