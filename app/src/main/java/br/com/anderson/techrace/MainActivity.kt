@@ -85,6 +85,7 @@ class MainActivity : Activity() {
     private var programmingMode: ProgrammingMode? = null
     private var programmingDialog: AlertDialog? = null
     private var programmingStatusView: TextView? = null
+    private var programmingSensorsView: TextView? = null
     private var programmingStartedAt = 0L
     private var resumePollingAfterProgramming = false
     private var liveFailureStreak = 0
@@ -271,6 +272,7 @@ class MainActivity : Activity() {
         liveFailureStreak = 0
         mapSecondStageAcknowledged = false
         programmingStatusView = null
+        programmingSensorsView = null
         programmingDialog?.dismiss()
         programmingDialog = null
         dashboard.connected = false
@@ -619,13 +621,24 @@ class MainActivity : Activity() {
             text = buildString {
                 append("${mode.label} iniciado.\n")
                 append("Aguardando confirmação do módulo.")
+                if (mode == ProgrammingMode.MAP) append("\n\n" + MapCalibrationDisplay.instructions(ProgrammingSession.Stage.WAITING_ACTIVE))
             }
             setTextIsSelectable(true)
         }
         programmingStatusView = status
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(status)
+            addView(TextView(this@MainActivity).apply {
+                setPadding(36, 12, 36, 24)
+                textSize = 20f
+                text = MapCalibrationDisplay.sensors(null)
+                programmingSensorsView = this
+            })
+        }
         val dialog = AlertDialog.Builder(this)
             .setTitle("Programando ${mode.label}")
-            .setView(ScrollView(this).apply { addView(status) })
+            .setView(ScrollView(this).apply { addView(content) })
             .setPositiveButton("Encerrar", null)
             .setNeutralButton("Atualizar", null)
             .setNegativeButton("Instruções", null)
@@ -644,7 +657,7 @@ class MainActivity : Activity() {
             }
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
                 showText("Instruções", if (mode == ProgrammingMode.MAP)
-                    "Etapa 1: marcha lenta estável sem carga.\nEtapa 2: aguarde o aviso da central para ligar o ar-condicionado ou aplicar a carga indicada.\nA central avança automaticamente; não há um segundo comando de início."
+                    MapCalibrationDisplay.instructions(ProgrammingSession.Stage.RUNNING) + "\n\n" + MapCalibrationDisplay.instructions(ProgrammingSession.Stage.MAP_LOAD)
                     else "Mantenha o motor estabilizado em marcha lenta e aguarde a confirmação da central.")
             }
         }
@@ -655,7 +668,7 @@ class MainActivity : Activity() {
         if (mapSecondStageAcknowledged || mapLoadDialog != null) return
         val dialog = AlertDialog.Builder(this)
             .setTitle("MAP — etapa 2: ligar carga")
-            .setMessage("A central solicitou a segunda etapa. Ligue o ar-condicionado. Em veículo automático, se aplicável ao procedimento, selecione D com o veículo imobilizado e o freio acionado. Mantenha a marcha lenta estável.\n\nA central detecta a carga e avança automaticamente.")
+            .setMessage(MapCalibrationDisplay.instructions(ProgrammingSession.Stage.MAP_LOAD) + "\n\n" + programmingSensorsView?.text.orEmpty())
             .setPositiveButton("Carga ligada") { _, _ -> mapSecondStageAcknowledged = true }
             .setCancelable(false).create()
         mapLoadDialog = dialog
@@ -679,16 +692,22 @@ class MainActivity : Activity() {
         busy = true
         val token = generation
         ioExecutor.execute {
-            var flags: Int? = null
-            var failure: String? = null
-            try { flags = readProgrammingFlags(token) }
-            catch (e: Exception) { failure = e.message ?: "Falha de comunicação" }
-            val data = flags
-            val err = failure
+            val observation = ProgrammingMonitor.read { request, attempts ->
+                rawExchange(request, token, attempts)
+            }
+            val sample = observation.sensors
+            val data = observation.flags
+            val err = observation.statusError
             handler.post {
                 if (!valid(token) || programmingMode != mode) return@post
                 busy = false
                 val elapsed = (SystemClock.elapsedRealtime() - programmingStartedAt) / 1000
+                programmingSensorsView?.text = MapCalibrationDisplay.sensors(sample)
+                if (mode == ProgrammingMode.MAP) {
+                    mapLoadDialog?.setMessage(MapCalibrationDisplay.instructions(ProgrammingSession.Stage.MAP_LOAD) +
+                        "\n\n" + MapCalibrationDisplay.sensors(sample) +
+                        if (data == null) "\nFalha ao consultar a central. Etapa atual não confirmada." else "")
+                }
                 if (data == null) {
                     programmingStatusView?.text = "Falha ao consultar a central: $err.\nA conclusão ainda não foi confirmada."
                 } else {
@@ -700,7 +719,16 @@ class MainActivity : Activity() {
                         ProgrammingSession.Stage.COMPLETE -> "${mode.label}: programação concluída e confirmada pela central."
                         else -> "Aguardando confirmação de início da central. • ${elapsed}s"
                     }
-                    if (stage == ProgrammingSession.Stage.MAP_LOAD) showMapLoadPrompt()
+                    programmingStatusView?.append("\n\n" + if (mode == ProgrammingMode.MAP)
+                        MapCalibrationDisplay.instructions(stage)
+                    else "Mantenha o motor em marcha lenta estável e aguarde a confirmação da central.")
+                    if (stage == ProgrammingSession.Stage.MAP_LOAD) {
+                        showMapLoadPrompt()
+                        mapLoadDialog?.setMessage(MapCalibrationDisplay.instructions(stage) +
+                            "\n\n" + MapCalibrationDisplay.sensors(sample))
+                    } else {
+                        mapLoadDialog?.dismiss(); mapLoadDialog = null
+                    }
                     if (stage == ProgrammingSession.Stage.COMPLETE) {
                         finishProgramming(mode)
                         return@post
@@ -710,6 +738,8 @@ class MainActivity : Activity() {
                     handler.postDelayed(programmingStatusTask, if (data == null) 1500L else 500L)
                 } else {
                     programmingStatusView?.append("\nTempo de acompanhamento excedido. Use Atualizar ou Encerrar. Não há confirmação de conclusão.")
+                    mapLoadDialog?.dismiss(); mapLoadDialog = null
+                    programmingSensorsView?.text = MapCalibrationDisplay.sensors(null)
                 }
             }
         }
@@ -722,6 +752,7 @@ class MainActivity : Activity() {
         mapLoadDialog?.dismiss(); mapLoadDialog = null
         programmingDialog?.dismiss(); programmingDialog = null
         programmingStatusView = null
+        programmingSensorsView = null
         polling = resumePollingAfterProgramming
         resumePollingAfterProgramming = false
         dashboard.autoReading = polling
@@ -781,11 +812,13 @@ class MainActivity : Activity() {
                 programmingMode = null
                 programmingSession = null
                 mapLoadDialog?.dismiss(); mapLoadDialog = null
+                programmingSensorsView?.text = MapCalibrationDisplay.sensors(null)
                 programmingStatusView?.text = "Modo de programação encerrado.\n\nTX: ${TechRaceProtocol.toHex(tx)}\nRX: ${TechRaceProtocol.toHex(rx)}"
                 if (closeDialog) {
                     programmingDialog?.dismiss()
                     programmingDialog = null
                     programmingStatusView = null
+                    programmingSensorsView = null
                 }
                 toast("Modo de programação encerrado")
                 if (resumePollingAfterProgramming || resumeLive) {

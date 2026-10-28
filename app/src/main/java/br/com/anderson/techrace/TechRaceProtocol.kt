@@ -12,6 +12,7 @@ object TechRaceProtocol {
     val READ_VERSION: ByteArray get() = readRequest(3, 1, 1)
     val READ_SETTINGS: ByteArray get() = readRequest(1, 1, 25)
     val READ_MIXTURE: ByteArray get() = readRequest(1, 3, 1)
+    val READ_PROGRAMMING_SENSORS: ByteArray get() = readRam(0x48, 10)
     val READ_PROGRAMMING_STATUS: ByteArray get() = readRam(0x63, 2)
     val READ_EXTENDED: ByteArray get() = readRam(0x4D, 10)
 
