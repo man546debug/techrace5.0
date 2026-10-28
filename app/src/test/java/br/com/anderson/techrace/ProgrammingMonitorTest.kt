@@ -21,7 +21,7 @@ class ProgrammingMonitorTest {
         assertTrue(requests.all { it[1].toInt() == 0 && TechRaceProtocol.crc8(it).toInt() == 0 })
         assertEquals(listOf(10, 2), requests.map { it[4].toInt() })
         assertEquals(128 * 2.5 / 255, result.sensors!!.mapVoltage, 0.000001)
-        assertEquals(1000, result.sensors.lambdaMv)
+        assertEquals(1000, result.sensors!!.lambdaMv)
         assertEquals(3, result.flags)
     }
 
