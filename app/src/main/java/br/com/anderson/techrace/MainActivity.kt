@@ -668,7 +668,7 @@ class MainActivity : Activity() {
         if (mapSecondStageAcknowledged || mapLoadDialog != null) return
         val dialog = AlertDialog.Builder(this)
             .setTitle("MAP — etapa 2: ligar carga")
-            .setMessage(MapCalibrationDisplay.instructions(ProgrammingSession.Stage.MAP_LOAD) + "\n\n" + programmingSensorsView?.text.orEmpty())
+            .setMessage(MapCalibrationDisplay.instructions(ProgrammingSession.Stage.MAP_LOAD) + "\n\n" + programmingSensorsView?.text?.toString().orEmpty())
             .setPositiveButton("Carga ligada") { _, _ -> mapSecondStageAcknowledged = true }
             .setCancelable(false).create()
         mapLoadDialog = dialog
