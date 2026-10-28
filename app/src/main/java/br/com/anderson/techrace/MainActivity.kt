@@ -41,9 +41,9 @@ class MainActivity : Activity() {
         private const val MAX_LIVE_FAILURES_BEFORE_PAUSE = 3
     }
 
-    private enum class ProgrammingMode(val selector: Int, val flagMask: Int, val label: String) {
-        SONDA_RPM(1, 0x40, "Sonda / RPM"),
-        MAP(2, 0x01, "Sensor MAP")
+    private enum class ProgrammingMode(val selector: Int, val flagMask: Int, val storedFlagMask: Int, val label: String) {
+        SONDA_RPM(1, 0x40, 0x02, "Sonda / RPM"),
+        MAP(2, 0x01, 0x01, "Sensor MAP")
     }
 
     private val actionUsbPermission = "br.com.anderson.techrace.USB_PERMISSION"
@@ -753,12 +753,45 @@ class MainActivity : Activity() {
         programmingDialog?.dismiss(); programmingDialog = null
         programmingStatusView = null
         programmingSensorsView = null
-        polling = resumePollingAfterProgramming
+        val resumeLive = resumePollingAfterProgramming
         resumePollingAfterProgramming = false
-        dashboard.autoReading = polling
-        showText("Programação concluída", "${mode.label} programado com sucesso. A central confirmou o encerramento da calibração.")
-        // Refresh persisted flags only after runtime calibration has finished.
-        queryModule(1, showResult = false)
+        polling = false
+        dashboard.autoReading = false
+        handler.removeCallbacks(pollTask)
+        dashboard.markProgrammingFlagsUnknown()
+        busy = true
+        val token = generation
+        ioExecutor.execute {
+            val result = try {
+                ProgrammingSettingsReader.read(mode.storedFlagMask, { valid(token) },
+                    { request -> rawExchange(request, token, attempts = 1) })
+            } catch (_: CancellationException) { return@execute }
+            handler.post {
+                if (!valid(token) || demoMode) return@post
+                busy = false
+                val settings = result.settings
+                settingsSnapshot = settings
+                settingsTime = if (settings == null) "Leitura após calibração falhou" else
+                    java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                snapshotTime = settingsTime
+                val wire = "TX: ${TechRaceProtocol.toHex(TechRaceProtocol.READ_SETTINGS)}\nRX: ${TechRaceProtocol.toHex(result.response)}"
+                moduleReport = "Após calibração ${mode.label}: ${result.error ?: "indicador confirmado"}\n" +
+                    (settings?.describe(rpmCalibration) ?: "EEPROM não confirmada") + "\n" + wire
+                if (settings != null) {
+                    dashboard.updateProgrammingFlags(settings.mapFlag, settings.rpmFlag)
+                } else {
+                    dashboard.markProgrammingFlagsUnknown()
+                    dashboard.markCommunicationFailure()
+                }
+                if (result.error == null) {
+                    showText("Programação concluída", "${mode.label}: calibração encerrada e indicador de programação confirmado na EEPROM da central.")
+                } else {
+                    showText("Calibração encerrada — indicador não confirmado",
+                        "A central encerrou a calibração de ${mode.label}, mas a confirmação do indicador gravado falhou.\n\n${result.error}\n\nO painel só fica verde quando o indicador é lido como ativo na EEPROM. Os detalhes estão no Diagnóstico.")
+                }
+                if (resumeLive) resumePolling()
+            }
+        }
     }
 
     private fun confirmProgrammingStop() {
@@ -1935,26 +1968,34 @@ class MainActivity : Activity() {
             var queryFailure: String? = null
             var payload: ByteArray? = null
             try {
-                val p = transport ?: error("Porta fechada")
-                val buf = ByteArray(128)
-                val drainDeadline = SystemClock.elapsedRealtime() + DRAIN_TIMEOUT_MS
-                while (p.read(buf, DRAIN_IDLE_READ_MS) > 0) {
-                    if (!valid(token)) throw CancellationException()
-                    check(SystemClock.elapsedRealtime() < drainDeadline) { "USB sem intervalo ocioso" }
-                }
-                if (!valid(token)) throw CancellationException()
-                p.write(tx, 500)
-                val deadline = SystemClock.elapsedRealtime() + QUERY_RESPONSE_TIMEOUT_MS
-                while (SystemClock.elapsedRealtime() < deadline) {
-                    if (!valid(token)) throw CancellationException()
-                    val n = p.read(buf, SERIAL_READ_MS)
-                    if (n > 0) {
-                        received.append(buf.copyOf(n))
-                        if (received.snapshot().size >= expected + 3) break
+                if (kind == 1) {
+                    val refreshed = ProgrammingSettingsReader.read(isCurrent = { valid(token) },
+                        exchange = { request -> rawExchange(request, token, attempts = 1) })
+                    received.append(refreshed.response)
+                    payload = refreshed.settings?.raw
+                    queryFailure = refreshed.error
+                } else {
+                    val p = transport ?: error("Porta fechada")
+                    val buf = ByteArray(128)
+                    val drainDeadline = SystemClock.elapsedRealtime() + DRAIN_TIMEOUT_MS
+                    while (p.read(buf, DRAIN_IDLE_READ_MS) > 0) {
+                        if (!valid(token)) throw CancellationException()
+                        check(SystemClock.elapsedRealtime() < drainDeadline) { "USB sem intervalo ocioso" }
                     }
+                    if (!valid(token)) throw CancellationException()
+                    p.write(tx, 500)
+                    val deadline = SystemClock.elapsedRealtime() + QUERY_RESPONSE_TIMEOUT_MS
+                    while (SystemClock.elapsedRealtime() < deadline) {
+                        if (!valid(token)) throw CancellationException()
+                        val n = p.read(buf, SERIAL_READ_MS)
+                        if (n > 0) {
+                            received.append(buf.copyOf(n))
+                            if (received.snapshot().size >= expected + 3) break
+                        }
+                    }
+                    payload = TechRaceProtocol.extractResponse(received.snapshot(), command, expected)
+                    check(payload != null) { "Resposta inválida: tamanho, função ou CRC; esperado ${expected + 3} bytes" }
                 }
-                payload = TechRaceProtocol.extractResponse(received.snapshot(), command, expected)
-                check(payload != null) { "Resposta inválida: tamanho, função ou CRC; esperado ${expected + 3} bytes" }
             } catch (e: Exception) { queryFailure = e.message ?: "Falha de comunicação" }
             val result = payload
             val failure = queryFailure
@@ -1966,7 +2007,10 @@ class MainActivity : Activity() {
                 if (failure != null || result == null) {
                     moduleReport = "Falha na consulta: $failure\n$wire"
                     if (kind == 0) firmwareVersion = "Consulta falhou"
-                    if (kind == 1) settingsSnapshot = null
+                    if (kind == 1) {
+                        settingsSnapshot = null
+                        dashboard.markProgrammingFlagsUnknown()
+                    }
                     dashboard.markCommunicationFailure()
                     toast("Consulta falhou; veja Diagnóstico.")
                     if (polling) handler.postDelayed(pollTask, pollingIntervalMs)

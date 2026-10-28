@@ -56,7 +56,9 @@ jobs:
                   print('::error title=Build category::' + label)
           # Output only filenames already published in this commit and numeric line locations.
           for filename in ['MainActivity.kt', 'ProgrammingMonitor.kt', 'MapCalibrationDisplay.kt',
-                           'ProgrammingMonitorTest.kt', 'MapCalibrationDisplayTest.kt']:
+                           'ProgrammingMonitorTest.kt', 'MapCalibrationDisplayTest.kt',
+                           'ProgrammingSettingsReader.kt', 'ProgrammingSettingsReaderTest.kt',
+                           'DashboardView.kt', 'DashboardProgrammingFlagsTest.kt']:
               lines = re.findall(re.escape(filename) + r':(\d+):', text)
               for number in sorted(set(lines)):
                   print('::error title=Compiler location::' + filename + ':' + number)

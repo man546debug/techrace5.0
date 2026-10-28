@@ -1,7 +1,18 @@
-# TechRace Android V5.0.10 — USB OTG, Bluetooth e ajustes
+# TechRace Android V5.0.11 — USB OTG, Bluetooth e ajustes
 
 Projeto Android em Kotlin baseado nos fontes originais fornecidos do software TechRace para Windows.
-Versão 5.0.10, versionCode 61, pacote `br.com.anderson.techrace`.
+Versão 5.0.11, versionCode 62, pacote `br.com.anderson.techrace`.
+
+## Indicadores de programação na V5.0.11
+
+Após a central encerrar a calibração, o APK relê a EEPROM até quatro vezes,
+com intervalo de 500 ms entre tentativas, para confirmar o indicador de MAP ou
+Sonda/RPM. A telemetria só retoma após essa verificação. Respostas com CRC inválido,
+timeout ou flags ainda antigos são consultadas novamente. O verde depende dos
+bits persistidos lidos da central; o encerramento da calibração sozinho não o força.
+Se o indicador continuar desativado, o APK informa a diferença. Se a EEPROM não
+puder ser lida, os indicadores ficam neutros e o diagnóstico registra a falha.
+Consultas de EEPROM ao conectar ou pelo menu também repetem falhas transitórias.
 
 ## Dashboard responsiva na V5.0.10
 

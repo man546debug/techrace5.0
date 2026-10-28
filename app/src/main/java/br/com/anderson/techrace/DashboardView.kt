@@ -63,6 +63,7 @@ class DashboardView(context: Context) : View(context) {
         set(value) { field = value; invalidate() }
     var mixtureFactorPercentPerIndex: Double? = null
         set(value) { field = value; invalidate() }
+    private var programmingFlagsKnown = false
     var mapProgrammed = false
         private set
     var sondaProgrammed = false
@@ -104,6 +105,7 @@ class DashboardView(context: Context) : View(context) {
         updateData(data)
         temperatureC = temperature
         mixtureIndex = mixture
+        programmingFlagsKnown = true
         mapProgrammed = true
         sondaProgrammed = true
         communicationOk = true
@@ -119,6 +121,7 @@ class DashboardView(context: Context) : View(context) {
         lambdaMv = 0
         temperatureC = null
         mixtureIndex = null
+        programmingFlagsKnown = false
         mapProgrammed = false
         sondaProgrammed = false
         communicationOk = false
@@ -131,7 +134,13 @@ class DashboardView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun markProgrammingFlagsUnknown() {
+        programmingFlagsKnown = false
+        invalidate()
+    }
+
     fun updateProgrammingFlags(map: Boolean, sondaRpm: Boolean) {
+        programmingFlagsKnown = true
         mapProgrammed = map
         sondaProgrammed = sondaRpm
         invalidate()
@@ -350,9 +359,10 @@ class DashboardView(context: Context) : View(context) {
             val left = b.left + i * b.width / 4 + 16
             val right = b.left + (i + 1) * b.width / 4 - 16
             fittedText(c, label, RectF(left, b.top + 5, right, b.top + b.height * .48f), 24f, muted, Paint.Align.CENTER)
-            val state = if (i == 3) errorCount.toString() else if (demoMode) "SIMULADO" else if (ok[i]) "OK" else "--"
+            val unknownProgramming = i < 2 && !programmingFlagsKnown && !demoMode
+            val state = if (i == 3) errorCount.toString() else if (demoMode) "SIMULADO" else if (unknownProgramming) "--" else if (ok[i]) "OK" else "--"
             fittedText(c, state, RectF(left, b.top + b.height * .5f, right, b.bottom - 5), 25f,
-                if (demoMode && i != 3) yellow else if (ok[i]) green else red, Paint.Align.CENTER)
+                if (demoMode && i != 3) yellow else if (unknownProgramming) muted else if (ok[i]) green else red, Paint.Align.CENTER)
         }
     }
 
