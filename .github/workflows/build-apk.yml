@@ -32,7 +32,17 @@ jobs:
           gradle-version: '8.7'
 
       - name: Testar protocolo e compilar APK
-        run: gradle --no-daemon testDebugUnitTest assembleDebug
+        run: |
+          set -o pipefail
+          gradle --no-daemon testDebugUnitTest assembleDebug 2>&1 | tee build-output.log
+
+      - name: Resumo da compilação
+        if: always()
+        run: |
+          echo '### Saída da compilação' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 150 build-output.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Disponibilizar testes
         if: always()
@@ -40,6 +50,7 @@ jobs:
         with:
           name: TechRace-V5.0-Testes
           path: |
+            build-output.log
             app/build/reports/tests/testDebugUnitTest/
             app/build/dashboard-previews/
           if-no-files-found: ignore
