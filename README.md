@@ -1,7 +1,14 @@
-# TechRace Android V5.0.11 — USB OTG, Bluetooth e ajustes
+# TechRace Android V5.0.12 — USB OTG, Bluetooth e ajustes
 
 Projeto Android em Kotlin baseado nos fontes originais fornecidos do software TechRace para Windows.
-Versão 5.0.11, versionCode 62, pacote `br.com.anderson.techrace`.
+Versão 5.0.12, versionCode 63, pacote `br.com.anderson.techrace`.
+
+## Tela ligada na V5.0.12
+
+A tela permanece ligada enquanto o painel e os menus do TechRace estão visíveis,
+evitando o desligamento automático durante a leitura ou programação. Ao sair do
+aplicativo, o Android volta a controlar o tempo de tela normalmente. Isso não
+mantém a conexão em segundo plano nem impede o bloqueio manual pelo botão físico.
 
 ## Indicadores de programação na V5.0.11
 
