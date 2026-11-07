@@ -1,7 +1,16 @@
-# TechRace Android V5.0.13 — USB OTG, Bluetooth e ajustes
+# TechRace Android V5.0.14 — USB OTG, Bluetooth e ajustes
 
 Projeto Android em Kotlin baseado nos fontes originais fornecidos do software TechRace para Windows.
-Versão 5.0.13, versionCode 64, pacote `br.com.anderson.techrace`.
+Versão 5.0.14, versionCode 65, pacote `br.com.anderson.techrace`.
+
+## Acesso à exportação e identificação da V5.0.14
+
+O botão **Exportar histórico PDF** fica fixo no topo de **Configurações**, fora da lista rolável,
+com destaque vermelho. Permanece habilitado com zero amostras e mostra a quantidade de leituras.
+Se não houver amostras, abre uma explicação sobre como iniciar o registro.
+Configurações, Sobre, painel e PDF usam `BuildConfig.VERSION_NAME`.
+O nome exibido pelo Android é gerado a partir do mesmo `versionName`, eliminando o antigo texto fixo V5.0.
+A versão desta publicação é **5.0.14**, código **65**.
 
 ## Exportação PDF na V5.0.13
 
@@ -100,6 +109,13 @@ Consultas de EEPROM ao conectar ou pelo menu também repetem falhas transitória
 - Leituras fragmentadas aguardam o quadro completo até o timeout; função, tamanho e CRC são verificados nas leituras de estado.
 - Mistura: a barra usa passos visuais de 0,1 no nível relativo, mas **a central grava um byte inteiro**, com resolução de **1,5625 ponto percentual de correção**. Valores vizinhos podem gerar o mesmo byte. A confirmação usa o limite recém-lido da central e mostra o byte MIX e a correção efetiva; só então grava. Após gravar, relê MIX para conferir.
 - Modo demonstração nunca transmite comandos.
+
+## Validação da V5.0.14
+
+A versão anterior à sincronização do nome do ícone passou por compilação e 69 testes.
+O teste percorre Configurações > botão fixo de PDF > formato completo > seletor do Android > gravação binária.
+Também verifica o botão habilitado sem dados e sua posição em um diálogo 800×480.
+A publicação inclui uma verificação adicional do número da versão, nome do aplicativo e textos de Configurações/Sobre.
 
 ## Validação da V5.0.13
 

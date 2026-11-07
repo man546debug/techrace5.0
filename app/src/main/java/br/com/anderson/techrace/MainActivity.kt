@@ -1362,10 +1362,30 @@ class MainActivity : Activity() {
             "Ler uma vez", "Desconectar", "Sobre",
             "Consultar versão do firmware", "Ler configurações EEPROM",
             "Ver última configuração lida", "RAM adicional (experimental, valores brutos)",
-            "Fator RPM e intervalo de leitura", "Exportar telemetria CSV",
-            "Exportar relatório PDF", "Limpar histórico de leituras"
+            "Fator RPM e intervalo de leitura", "Exportar telemetria CSV", "Limpar histórico de leituras"
         )
-        AlertDialog.Builder(this).setTitle("Configurações").setItems(items) { _, index ->
+        val padding = (16 * resources.displayMetrics.density).toInt()
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding, padding, padding / 2)
+        }
+        header.addView(TextView(this).apply {
+            text = "Configurações • ${BuildConfig.VERSION_NAME}"
+            textSize = 20f
+            setPadding(0, 0, 0, padding / 2)
+        })
+        val pdfButton = Button(this).apply {
+            id = R.id.export_pdf_button
+            text = "Exportar histórico PDF (${csvRows.size} ${if (csvRows.size == 1) "leitura" else "leituras"})"
+            isEnabled = true
+            isAllCaps = false
+            backgroundTintList = android.content.res.ColorStateList.valueOf(Color.rgb(198, 40, 40))
+            setTextColor(Color.WHITE)
+            minHeight = (48 * resources.displayMetrics.density).toInt()
+        }
+        header.addView(pdfButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        val dialog = AlertDialog.Builder(this).setCustomTitle(header).setItems(items) { _, index ->
             when (index) {
                 0 -> chooseConnectionType()
                 1 -> if (demoMode) setDemoMode(false) else AlertDialog.Builder(this)
@@ -1385,7 +1405,7 @@ class MainActivity : Activity() {
                 }
                 4 -> if (demoMode || !connected) toast("Conecte o leitor em modo real") else pollOnce()
                 5 -> if (!demoMode) disconnect()
-                6 -> AlertDialog.Builder(this).setTitle("TechRace V5.0")
+                6 -> AlertDialog.Builder(this).setTitle("TechRace ${BuildConfig.VERSION_NAME}")
                     .setMessage("Monitoramento, ajustes e exportação de dados.")
                     .setPositiveButton("OK", null).show()
                 7 -> queryModule(0)
@@ -1395,10 +1415,14 @@ class MainActivity : Activity() {
                 10 -> showRamQueryConfirmation()
                 11 -> showLocalAdjustments()
                 12 -> exportDocument("techrace-telemetria.csv", "text/csv", csvContent())
-                13 -> showPdfExport()
-                14 -> { csvRows.clear(); toast("Histórico de leituras limpo") }
+                13 -> { csvRows.clear(); toast("Histórico de leituras limpo") }
             }
-        }.show()
+        }.create()
+        pdfButton.setOnClickListener {
+            dialog.dismiss()
+            showPdfExport()
+        }
+        dialog.show()
     }
 
     private fun showFuelingDialog() {
@@ -2088,7 +2112,10 @@ class MainActivity : Activity() {
         val samples = try { csvRows.map(TelemetrySample::fromCsv) }
         catch (e: Exception) { showText("Histórico inválido", "Não foi possível ler o histórico: ${e.message}"); return }
         if (samples.isEmpty()) {
-            toast("Ainda não há leituras. Conecte o módulo e inicie a leitura contínua.")
+            AlertDialog.Builder(this)
+                .setTitle("Nenhuma leitura para exportar")
+                .setMessage("O histórico desta sessão está vazio. Conecte o módulo e inicie a leitura contínua. Depois, volte a Configurações e toque em Exportar histórico PDF.\n\nO PDF só pode ser gerado após registrar pelo menos uma leitura. As amostras não são mantidas após encerrar o aplicativo.")
+                .setPositiveButton("Entendi", null).show()
             return
         }
         val real = samples.filterNot { it.demo }

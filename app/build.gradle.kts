@@ -11,8 +11,9 @@ android {
         applicationId = "br.com.anderson.techrace"
         minSdk = 24
         targetSdk = 34
-        versionCode = 64
-        versionName = "5.0.13"
+        versionCode = 65
+        versionName = "5.0.14"
+        resValue("string", "app_name", "TechRace Flex ECU $versionName")
     }
 
     buildFeatures { buildConfig = true }
