@@ -73,6 +73,7 @@ jobs:
             build-output.log
             app/build/reports/tests/testDebugUnitTest/
             app/build/dashboard-previews/
+            app/build/pdf-previews/
           if-no-files-found: ignore
 
       - name: Disponibilizar APK

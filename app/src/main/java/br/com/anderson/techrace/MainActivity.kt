@@ -76,7 +76,10 @@ class MainActivity : Activity() {
     private var moduleReport = "Nenhuma consulta realizada."
     private var snapshotTime = "--"
     private val csvRows = java.util.ArrayDeque<String>()
-    private var pendingExport: String? = null
+    private var pendingExport: ByteArray? = null
+    private var exportPreparing = false
+    private var exportWriting = false
+    private val exportExecutor = Executors.newSingleThreadExecutor()
     private var lastRx = byteArrayOf()
     private var lastError = "Nenhuma leitura realizada"
     private var lastValid = "--"
@@ -243,6 +246,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         ioExecutor.shutdown() // finish the already queued close operation
+        exportExecutor.shutdown() // allow any already-started file save to finish
         unregisterReceiver(receiver)
         unregisterReceiver(bluetoothDiscoveryReceiver)
         super.onDestroy()
@@ -1358,7 +1362,8 @@ class MainActivity : Activity() {
             "Ler uma vez", "Desconectar", "Sobre",
             "Consultar versão do firmware", "Ler configurações EEPROM",
             "Ver última configuração lida", "RAM adicional (experimental, valores brutos)",
-            "Fator RPM e intervalo de leitura", "Exportar telemetria CSV", "Limpar histórico CSV"
+            "Fator RPM e intervalo de leitura", "Exportar telemetria CSV",
+            "Exportar relatório PDF", "Limpar histórico de leituras"
         )
         AlertDialog.Builder(this).setTitle("Configurações").setItems(items) { _, index ->
             when (index) {
@@ -1390,7 +1395,8 @@ class MainActivity : Activity() {
                 10 -> showRamQueryConfirmation()
                 11 -> showLocalAdjustments()
                 12 -> exportDocument("techrace-telemetria.csv", "text/csv", csvContent())
-                13 -> { csvRows.clear(); toast("Histórico CSV limpo") }
+                13 -> showPdfExport()
+                14 -> { csvRows.clear(); toast("Histórico de leituras limpo") }
             }
         }.show()
     }
@@ -2074,9 +2080,70 @@ class MainActivity : Activity() {
 
     private fun csvContent() = "timestamp_unix_ms;modo;firmware;fator_rpm;rpm;injecao_ms;correcao_pct;map_v;sonda_mv;temperatura_c;y_percent;intervalo_raw;temperatura_adc\n" + csvRows.joinToString("\n")
 
+    private fun showPdfExport() {
+        if (pendingExport != null || exportPreparing || exportWriting) {
+            toast("Exportação já em andamento")
+            return
+        }
+        val samples = try { csvRows.map(TelemetrySample::fromCsv) }
+        catch (e: Exception) { showText("Histórico inválido", "Não foi possível ler o histórico: ${e.message}"); return }
+        if (samples.isEmpty()) {
+            toast("Ainda não há leituras. Conecte o módulo e inicie a leitura contínua.")
+            return
+        }
+        val real = samples.filterNot { it.demo }
+        val demo = samples.filter { it.demo }
+        if (real.isNotEmpty() && demo.isNotEmpty()) {
+            AlertDialog.Builder(this).setTitle("Escolher histórico para o PDF")
+                .setItems(arrayOf("Leituras reais (${real.size} amostras)", "Demonstração (${demo.size} amostras)")) { _, index ->
+                    choosePdfFormat(if (index == 0) real else demo)
+                }.setNegativeButton("Cancelar", null).show()
+        } else choosePdfFormat(if (real.isNotEmpty()) real else demo)
+    }
+
+    private fun choosePdfFormat(samples: List<TelemetrySample>) {
+        val pages = TelemetryPdfReport.pageCount(samples.size, includeTable = true)
+        AlertDialog.Builder(this)
+            .setTitle(if (samples.first().demo) "PDF de demonstração" else "Exportar histórico PDF")
+            .setItems(arrayOf("Resumo e gráficos (1 página)", "Histórico completo (${samples.size} amostras / $pages páginas)")) { _, index ->
+                preparePdfExport(samples, includeTable = index == 1)
+            }.setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun preparePdfExport(samples: List<TelemetrySample>, includeTable: Boolean) {
+        if (pendingExport != null || exportPreparing || exportWriting) { toast("Exportação já em andamento"); return }
+        // Snapshot before background generation: incoming samples cannot change the report halfway through.
+        val snapshot = samples.toList()
+        val generatedAt = System.currentTimeMillis()
+        val zone = java.util.TimeZone.getDefault().clone() as java.util.TimeZone
+        exportPreparing = true
+        toast("Gerando PDF com ${snapshot.size} amostras...")
+        exportExecutor.execute {
+            var bytes: ByteArray? = null
+            var failure: String? = null
+            try { bytes = TelemetryPdfReport.create(snapshot, BuildConfig.VERSION_NAME, includeTable, zone, generatedAt) }
+            catch (e: Exception) { failure = e.message ?: "Falha na geração do PDF" }
+            val result = bytes
+            val error = failure
+            handler.post {
+                exportPreparing = false
+                if (isFinishing || isDestroyed) return@post
+                if (result == null) { toast("Não foi possível gerar o PDF: $error"); return@post }
+                if (!foreground) { toast("Volte ao TechRace e solicite a exportação novamente"); return@post }
+                val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).apply { timeZone = zone }
+                    .format(java.util.Date(generatedAt))
+                val suffix = if (snapshot.first().demo) "-demonstracao" else ""
+                exportBytes("TechRace-Historico-$stamp$suffix.pdf", "application/pdf", result)
+            }
+        }
+    }
+
+    private fun exportDocument(name: String, mime: String, content: String) =
+        exportBytes(name, mime, content.toByteArray(Charsets.UTF_8))
+
     @Suppress("DEPRECATION")
-    private fun exportDocument(name: String, mime: String, content: String) {
-        if (pendingExport != null) { toast("Exportação já em andamento"); return }
+    private fun exportBytes(name: String, mime: String, content: ByteArray) {
+        if (pendingExport != null || exportPreparing || exportWriting) { toast("Exportação já em andamento"); return }
         pendingExport = content
         try {
             startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
@@ -2095,11 +2162,20 @@ class MainActivity : Activity() {
         pendingExport = null
         if (resultCode != RESULT_OK || content == null) return
         val uri = data?.data ?: return
-        try {
-            val stream = contentResolver.openOutputStream(uri, "wt") ?: error("Arquivo indisponível")
-            stream.bufferedWriter(Charsets.UTF_8).use { it.write(content) }
-            toast("Arquivo exportado")
-        } catch (e: Exception) { toast("Falha ao exportar: ${e.message}") }
+        exportWriting = true
+        exportExecutor.execute {
+            var failure: String? = null
+            try {
+                val stream = contentResolver.openOutputStream(uri, "wt") ?: error("Arquivo indisponível")
+                stream.use { it.write(content) }
+            } catch (e: Exception) { failure = e.message ?: "Arquivo indisponível" }
+            val error = failure
+            handler.post {
+                exportWriting = false
+                if (!isFinishing && !isDestroyed)
+                    toast(if (error == null) "Arquivo exportado" else "Falha ao exportar: $error")
+            }
+        }
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

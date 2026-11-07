@@ -1,7 +1,23 @@
-# TechRace Android V5.0.12 — USB OTG, Bluetooth e ajustes
+# TechRace Android V5.0.13 — USB OTG, Bluetooth e ajustes
 
 Projeto Android em Kotlin baseado nos fontes originais fornecidos do software TechRace para Windows.
-Versão 5.0.12, versionCode 63, pacote `br.com.anderson.techrace`.
+Versão 5.0.13, versionCode 64, pacote `br.com.anderson.techrace`.
+
+## Exportação PDF na V5.0.13
+
+Em **Configurações > Exportar relatório PDF**, escolha **Resumo e gráficos** ou **Histórico completo**.
+O resumo traz mínimo, média e máximo de correção (%), MAP (V), sonda (mV) e temperatura (°C),
+além de gráficos pelo horário real das amostras. O relatório completo acrescenta a tabela cronológica
+com data/hora e milissegundos, RPM, tempo de injeção, correção, MAP, sonda e temperatura.
+
+- Usa o mesmo histórico do CSV: até as últimas 10.000 leituras válidas acumuladas enquanto o aplicativo está aberto. O histórico não persiste após encerrar o processo.
+- O PDF captura as amostras disponíveis ao solicitar a exportação; novas leituras não alteram o arquivo em geração.
+- Leituras reais e simulação são exportadas separadamente. PDFs de demonstração são identificados claramente.
+- Temperatura ausente é exibida como `--`, sem convertê-la em zero ou incluí-la nas estatísticas. Lacunas acima de cinco segundos não são conectadas nos gráficos.
+- Não converte MAP em pressão e não trata a correção como teor de etanol.
+- Geração e gravação usam um executor separado da comunicação serial para não bloquear a interface.
+- O Android pede a pasta e o nome do arquivo; PDF, CSV e TXT continuam disponíveis sem nova permissão de armazenamento.
+- **Limpar histórico de leituras** limpa as amostras usadas tanto pelo CSV como pelo PDF.
 
 ## Tela ligada na V5.0.12
 
@@ -85,9 +101,17 @@ Consultas de EEPROM ao conectar ou pelo menu também repetem falhas transitória
 - Mistura: a barra usa passos visuais de 0,1 no nível relativo, mas **a central grava um byte inteiro**, com resolução de **1,5625 ponto percentual de correção**. Valores vizinhos podem gerar o mesmo byte. A confirmação usa o limite recém-lido da central e mostra o byte MIX e a correção efetiva; só então grava. Após gravar, relê MIX para conferir.
 - Modo demonstração nunca transmite comandos.
 
+## Validação da V5.0.13
+
+`testDebugUnitTest assembleDebug` concluído com sucesso: 68 testes, zero falhas/erros e nenhum ignorado.
+Os testes cobrem mapeamento das unidades do CSV, ausência de temperatura, separação real/demo,
+paginação até 10.000 amostras, ordenação e offsets do PDF, MIME do seletor e gravação binária integral.
+O PDF de demonstração com 95 amostras foi aberto com um leitor independente e renderizado para
+conferir resumo, gráficos e tabela em quatro páginas. Assinatura e versão do APK foram verificadas.
+
 ## Validação em bancada/veículo
 
-Compilação local da versão 5.0.10: `testDebugUnitTest assembleDebug` concluída com sucesso; 42 testes, zero falhas/erros, nenhum teste ignorado. Assinatura do APK verificada com `apksigner`; pacote `br.com.anderson.techrace`, versionCode 61.
+Validação anterior da versão 5.0.10: `testDebugUnitTest assembleDebug` concluída com sucesso; 42 testes, zero falhas/erros, nenhum teste ignorado. Assinatura do APK verificada com `apksigner`; pacote `br.com.anderson.techrace`, versionCode 61.
 
 Os testes automatizados cobrem estados do protocolo e quantização. Não houve teste com a central física; a sequência abaixo continua pendente de validação em bancada/veículo.
 
