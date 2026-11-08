@@ -1093,7 +1093,23 @@ class MainActivity : Activity() {
         field("coldTime", "Tempo de injeção (ms)",
             ModuleSettings.crankingDurationMilliseconds(u(12), u(13)).toString())
         field("coldTemp", "Temperatura partida (°C)", settings.temperature(17).toString())
-        field("initialMix", "Mistura inicial (%)", pct(14), true)
+        val initialMixInput = field("initialMix", "Mistura inicial (%)", pct(14), true)
+        val initialMixPreview = TextView(this).apply { textSize = 12f }
+        box.addView(initialMixPreview)
+        fun updateInitialMixPreview() {
+            val value = initialMixInput.text.toString().trim().replace(',', '.').toDoubleOrNull()
+            initialMixPreview.text = if (value != null && value.isFinite() && value in 0.0..100.0) {
+                val stored = TechRaceProtocol.encodePercent(value) * 100.0 / 64.0
+                "Valor a enviar: %.4f%%. Passo: 1,5625 ponto percentual.%s".format(
+                    stored, if (value < 10.0) " Abaixo de 10%: teste de compatibilidade com a central." else "")
+            } else "Informe de 0% até a correção máxima. Passo: 1,5625 ponto percentual."
+        }
+        initialMixInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = updateInitialMixPreview()
+            override fun afterTextChanged(s: android.text.Editable?) {}
+        })
+        updateInitialMixPreview()
         val externalStart = check("Partida externa", 0x04)
         val limitedByIdle = check("Limitado pela lenta", 0x08)
 
@@ -1225,7 +1241,7 @@ class MainActivity : Activity() {
                     require(coldTime in 0.0..4000.0) { "Tempo de injeção deve ficar entre 0 e 4000 ms" }
                     require(coldTemp in 15.0..35.0) { "Temp. máx. da partida a frio deve ficar entre 15 e 35 °C" }
                     require(maxCorrection in 10.0..60.0) { "Limite máximo deve estar entre 10% e 60%" }
-                    require(initialMix in 10.0..maxCorrection) { "Mistura inicial deve ficar entre 10% e a correção máxima" }
+                    require(initialMix.isFinite() && initialMix in 0.0..maxCorrection) { "Mistura inicial deve ficar entre 0% e a correção máxima" }
                     require(correctionTemp in 0.0..100.0) { "Temperatura máxima da correção deve ficar entre 0 e 100 °C" }
 
                     val changed = settings.raw.copyOf()
@@ -1272,7 +1288,8 @@ class MainActivity : Activity() {
                     if (connected && foreground && !demoMode) {
                         AlertDialog.Builder(this)
                             .setTitle("Gravar alterações na central?")
-                            .setMessage("Os ajustes serão enviados à EEPROM e lidos novamente para confirmar a gravação.")
+                            .setMessage("Mistura inicial solicitada: %.4f%%. Valor a enviar: %.4f%%.\n\nOs ajustes serão enviados à EEPROM e lidos novamente para confirmar a gravação. A confirmação comprova o valor armazenado; o funcionamento abaixo de 10%% depende do firmware.".format(
+                                initialMix, (changed[14].toInt() and 255) * 100.0 / 64.0))
                             .setPositiveButton("Gravar agora") { _, _ ->
                                 dialog.dismiss()
                                 saveLocalSettingsDraft(changed)
@@ -1346,7 +1363,7 @@ class MainActivity : Activity() {
                     settingsSnapshot = ModuleSettings(result)
                     settingsTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
                     moduleReport = settingsSnapshot!!.describe(rpmCalibration)
-                    toast("Ajustes gravados e conferidos")
+                    toast("Ajustes gravados e conferidos. Mistura inicial: %.4f%%".format((result[14].toInt() and 255) * 100.0 / 64.0))
                 }
                 if (resume) resumePolling()
             }

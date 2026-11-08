@@ -11,8 +11,8 @@ android {
         applicationId = "br.com.anderson.techrace"
         minSdk = 24
         targetSdk = 34
-        versionCode = 65
-        versionName = "5.0.14"
+        versionCode = 66
+        versionName = "5.0.15"
         resValue("string", "app_name", "TechRace Flex ECU $versionName")
     }
 
