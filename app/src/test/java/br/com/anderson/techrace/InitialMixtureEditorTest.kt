@@ -38,7 +38,7 @@ class InitialMixtureEditorTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         val activity = controller.get()
         try {
-            for ((requested, raw) in listOf("0" to 0, "2" to 1, "3" to 2, "3,125" to 2)) {
+            for ((requested, raw) in listOf("0" to 0, "2" to 1, "3" to 2, "3.125" to 2)) {
                 val editor = openEditor(activity)
                 mixtureInput(editor).setText(requested)
                 val views = descendants(editor.window!!.decorView)
