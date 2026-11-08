@@ -201,7 +201,7 @@ class MainActivity : Activity() {
             }
         }
         syncFuelingCalibration()
-        setContentView(dashboard)
+        setSafeContentView(dashboard, Color.rgb(6, 9, 11))
         if (preferences.getBoolean("demo_mode", false)) {
             AlertDialog.Builder(this).setTitle("Retomar demonstração?")
                 .setMessage("Serão exibidos dados simulados, sem comunicação USB.")
@@ -1100,9 +1100,8 @@ class MainActivity : Activity() {
             val value = initialMixInput.text.toString().trim().replace(',', '.').toDoubleOrNull()
             initialMixPreview.text = if (value != null && value.isFinite() && value in 0.0..100.0) {
                 val stored = TechRaceProtocol.encodePercent(value) * 100.0 / 64.0
-                "Valor a enviar: %.4f%%. Passo: 1,5625 ponto percentual.%s".format(
-                    stored, if (value < 10.0) " Abaixo de 10%: teste de compatibilidade com a central." else "")
-            } else "Informe de 0% até a correção máxima. Passo: 1,5625 ponto percentual."
+                "Valor a gravar: %.4f%%".format(stored)
+            } else ""
         }
         initialMixInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -1288,7 +1287,7 @@ class MainActivity : Activity() {
                     if (connected && foreground && !demoMode) {
                         AlertDialog.Builder(this)
                             .setTitle("Gravar alterações na central?")
-                            .setMessage("Mistura inicial solicitada: %.4f%%. Valor a enviar: %.4f%%.\n\nOs ajustes serão enviados à EEPROM e lidos novamente para confirmar a gravação. A confirmação comprova o valor armazenado; o funcionamento abaixo de 10%% depende do firmware.".format(
+                            .setMessage("Mistura inicial solicitada: %.4f%%. Valor a enviar: %.4f%%.\n\nConfirmar a gravação dos ajustes na central?".format(
                                 initialMix, (changed[14].toInt() and 255) * 100.0 / 64.0))
                             .setPositiveButton("Gravar agora") { _, _ ->
                                 dialog.dismiss()

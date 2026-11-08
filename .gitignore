@@ -3,3 +3,10 @@
 local.properties
 .idea/
 *.iml
+
+# Signing material stays private.
+*.jks
+*.keystore
+*.p12
+keystore.properties
+signing-private/

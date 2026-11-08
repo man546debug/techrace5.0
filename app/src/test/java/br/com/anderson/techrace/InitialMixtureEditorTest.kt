@@ -46,8 +46,9 @@ class InitialMixtureEditorTest {
                 mixtureInput(editor).setText(requested)
                 val views = descendants(editor.window!!.decorView)
                 assertTrue(views.filterIsInstance<TextView>().any {
-                    it.text.toString().startsWith("Valor a enviar:") && it.text.contains("teste de compatibilidade")
+                    it.text.toString().startsWith("Valor a gravar:")
                 })
+                assertFalse(views.filterIsInstance<TextView>().any { it.text.contains("teste de compatibilidade") })
                 views.filterIsInstance<Button>().single { it.text.toString() == "Salvar ajustes no celular" }.performClick()
                 assertFalse("Low initial mixture must pass the actual editor validation", editor.isShowing)
                 val saved = activity.getSharedPreferences("techrace_settings", 0)

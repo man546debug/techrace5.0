@@ -1,16 +1,17 @@
-# TechRace Android V5.0.15 — USB OTG, Bluetooth e ajustes
+# TechRace Android V5.0.16 — USB OTG, Bluetooth e ajustes
 
 Projeto Android em Kotlin baseado nos fontes originais fornecidos do software TechRace para Windows.
-Versão 5.0.15, versionCode 66, pacote `br.com.anderson.techrace`.
+Versão 5.0.16, versionCode 67, pacote `br.com.anderson.techrace`.
 
-## Mistura inicial abaixo de 10% na V5.0.15
+## Distribuição na V5.0.16
 
-Em Ajustes > Ajustar ECU > Partida à frio, a mistura inicial aceita de 0% até o limite máximo de correção.
-A prévia e a confirmação informam o valor quantizado que será enviado: 2% vira 1,5625%; 3% vira 3,125%.
-O passo permanece 1,5625 ponto percentual. O limite máximo continua entre 10% e 60%; a mistura manual não muda.
-A gravação mantém ACK e releitura integral da EEPROM. A confirmação informa o valor armazenado;
-aceitar a gravação não comprova que o firmware aplica essa correção durante a partida.
-Valores abaixo de 10% ficam identificados como teste de compatibilidade.
+- Mistura inicial aceita de 0% até a correção máxima, sem mensagens de teste. A prévia mostra somente o valor a gravar, em passos de 1,5625 ponto percentual.
+- Mantém confirmação por releitura integral da EEPROM, tela ligada e PDF em Configurações.
+- compileSdk/targetSdk 36; mínimo Android 7 / API 24. AGP 8.10.1 e Gradle 8.11.1.
+- Painel e entrada respeitam barras do sistema e recortes em Android 15/16.
+- A automação gera APK debug, APK release sem assinatura e AAB release sem assinatura.
+- Os pacotes finais são assinados fora do repositório público. Não publique chaves ou senhas.
+- Instruções de distribuição: [docs/PLAY_STORE.md](docs/PLAY_STORE.md).
 
 ## Acesso à exportação e identificação da V5.0.14
 

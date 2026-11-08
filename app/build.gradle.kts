@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "br.com.anderson.techrace"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "br.com.anderson.techrace"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 66
-        versionName = "5.0.15"
+        targetSdk = 36
+        versionCode = 67
+        versionName = "5.0.16"
         resValue("string", "app_name", "TechRace Flex ECU $versionName")
     }
 
@@ -39,5 +39,5 @@ android {
 dependencies {
     implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.robolectric:robolectric:4.12.2")
+    testImplementation("org.robolectric:robolectric:4.16")
 }

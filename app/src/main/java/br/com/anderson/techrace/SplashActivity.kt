@@ -21,13 +21,13 @@ class SplashActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val padding = (24 * resources.displayMetrics.density).toInt()
-        setContentView(ImageView(this).apply {
+        setSafeContentView(ImageView(this).apply {
             setBackgroundColor(Color.WHITE)
             setImageResource(R.drawable.techrace_logo)
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(padding, padding, padding, padding)
             contentDescription = "TechRace Fuel Injection"
-        })
+        }, Color.WHITE)
     }
 
     override fun onResume() {
