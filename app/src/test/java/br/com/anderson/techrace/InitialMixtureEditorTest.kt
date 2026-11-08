@@ -1,6 +1,7 @@
 package br.com.anderson.techrace
 
 import android.app.AlertDialog
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -11,6 +12,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlertDialog
 import org.robolectric.shadows.ShadowToast
@@ -25,6 +27,7 @@ class InitialMixtureEditorTest {
         MainActivity::class.java.getDeclaredMethod("showModuleAdjustmentEditor", ModuleSettings::class.java,
             Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType).apply { isAccessible = true }
             .invoke(activity, ModuleSettings.editableDefaults(1.0), false, false)
+        shadowOf(Looper.getMainLooper()).idle()
         return ShadowAlertDialog.getLatestAlertDialog()
     }
 
